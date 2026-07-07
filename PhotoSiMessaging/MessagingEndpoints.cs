@@ -62,7 +62,7 @@ public class MessagingRouteBuilder
 
 public static class MessagingEndpoints
 {
-    public const int DefaultPort = 8081;
+    private const int DefaultPort = 8081;
 
     // Mappa i subscriber + GET /_init e registra il listener dedicato.
     // Tutto è escluso da OpenAPI e risponde solo sulla porta di messaggistica: esponi solo
@@ -99,7 +99,7 @@ public static class MessagingEndpoints
 
 
     // "cart-service" / "CartService" / "cart service" -> "CART_SERVICE"
-    public static string ToConstantCase(string source)
+    internal static string ToConstantCase(string source)
     {
         var result = new System.Text.StringBuilder(source.Length + source.Length / 2);
 

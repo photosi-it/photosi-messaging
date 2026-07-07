@@ -5,6 +5,8 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PhotoSiMessaging", "PhotoSiMessaging\PhotoSiMessaging.csproj", "{13C6EC46-391E-464D-88A4-C535691BEB15}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PhotoSiMessaging.Test", "PhotoSiMessaging.Test\PhotoSiMessaging.Test.csproj", "{5B840712-A4F9-4606-8D2D-66F3AE4DE4EF}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -18,5 +20,9 @@ Global
 		{13C6EC46-391E-464D-88A4-C535691BEB15}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{13C6EC46-391E-464D-88A4-C535691BEB15}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{13C6EC46-391E-464D-88A4-C535691BEB15}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5B840712-A4F9-4606-8D2D-66F3AE4DE4EF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5B840712-A4F9-4606-8D2D-66F3AE4DE4EF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5B840712-A4F9-4606-8D2D-66F3AE4DE4EF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5B840712-A4F9-4606-8D2D-66F3AE4DE4EF}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
