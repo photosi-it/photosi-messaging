@@ -65,6 +65,31 @@ namespace PhotoSiMessaging.Test
         }
 
         [TestMethod]
+        public async Task CallAsyncExplicit_DottedName_BuildsUrlAndSendsBody()
+        {
+            var (client, stub) = NewClient(HttpStatusCode.OK, """{"reply":"HI"}""");
+
+            var response = await client.CallAsync<CartDirectory.Response.Echo>(
+                "AppCmsDirectory", "CrossSellingPages.List", new CartDirectory.Request.Echo("hi"));
+
+            Assert.AreEqual("HI", response.Reply);
+            Assert.AreEqual("/publish/rpc/?directory=AppCmsDirectory&name=CrossSellingPages.List&timeout=10000", stub.LastRequest!.RequestUri!.PathAndQuery);
+            Assert.AreEqual("""{"text":"hi"}""", stub.LastBody);
+        }
+
+        [TestMethod]
+        public async Task CallAsyncExplicit_NullRequest_SendsNullBody()
+        {
+            var (client, stub) = NewClient(HttpStatusCode.OK, """{"reply":"HI"}""");
+
+            var response = await client.CallAsync<CartDirectory.Response.Echo>(
+                "AppCmsDirectory", "CrossSellingPages.List", null);
+
+            Assert.AreEqual("HI", response.Reply);
+            Assert.AreEqual("null", stub.LastBody);
+        }
+
+        [TestMethod]
         public async Task CallAsync_NullReply_ThrowsSomethingWentWrong()
         {
             var (client, _) = NewClient(HttpStatusCode.OK, "null");

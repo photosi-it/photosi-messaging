@@ -11,12 +11,17 @@ internal sealed class MessagingClient(HttpClient httpClient) : IMessagingClient
     internal const string RpcBasePath = "/publish/rpc/";
     private const string PubSubBasePath = "/publish/pubsub/";
 
-    public async Task<TResponse> CallAsync<TRequest, TResponse>(TRequest request, int timeoutMs = IMessagingClient.DefaultRpcTimeoutMs)
+    public Task<TResponse> CallAsync<TRequest, TResponse>(TRequest request, int timeoutMs = IMessagingClient.DefaultRpcTimeoutMs)
     {
         var requestType = typeof(TRequest);
-        var directory = GetDirectory(requestType);
-        var name = requestType.Name;
+        return SendRpcAsync<TResponse>(GetDirectory(requestType), requestType.Name, request, timeoutMs);
+    }
 
+    public Task<TResponse> CallAsync<TResponse>(string directory, string name, object? request, int timeoutMs = IMessagingClient.DefaultRpcTimeoutMs)
+        => SendRpcAsync<TResponse>(directory, name, request, timeoutMs);
+
+    private async Task<TResponse> SendRpcAsync<TResponse>(string directory, string name, object? request, int timeoutMs)
+    {
         var response = await httpClient.PostAsJsonAsync(
             $"{RpcBasePath}?directory={Uri.EscapeDataString(directory)}&name={Uri.EscapeDataString(name)}&timeout={timeoutMs}",
             request);
