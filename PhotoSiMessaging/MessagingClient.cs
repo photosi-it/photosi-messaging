@@ -6,14 +6,12 @@ using Polly;
 
 namespace PhotoSiMessaging;
 
-public class MessagingClient(HttpClient httpClient)
+public class MessagingClient(HttpClient httpClient) : IMessagingClient
 {
     protected internal const string RpcBasePath = "/publish/rpc/";
     private const string PubSubBasePath = "/publish/pubsub/";
 
-    private const int DefaultRpcTimeoutMs = 10_000;
-
-    public async Task<TResponse> CallAsync<TRequest, TResponse>(TRequest request, int timeoutMs = DefaultRpcTimeoutMs)
+    public async Task<TResponse> CallAsync<TRequest, TResponse>(TRequest request, int timeoutMs = IMessagingClient.DefaultRpcTimeoutMs)
     {
         var requestType = typeof(TRequest);
         var directory = GetDirectory(requestType);
@@ -25,10 +23,13 @@ public class MessagingClient(HttpClient httpClient)
 
         if (response.IsSuccessStatusCode)
         {
-            return (await response.Content.ReadFromJsonAsync<TResponse>())!;
+            return await response.Content.ReadFromJsonAsync<TResponse>()
+                ?? throw new SomethingWentWrongException($"Empty RPC reply from {directory}:{name}");
         }
 
-        throw await ToExceptionAsync(response, directory, name, JsonSerializer.Serialize(request));
+        // Web options = camelCase: la stessa forma spedita da PostAsJsonAsync, così il body
+        // allegato all'eccezione è riutilizzabile per un replay tale e quale
+        throw await ToExceptionAsync(response, directory, name, JsonSerializer.Serialize(request, JsonSerializerOptions.Web));
     }
 
     // topic PhotosiMessage.{directory}:Message.{name}; 204 al successo. Stessa deduzione di CallAsync.
@@ -60,20 +61,26 @@ public class MessagingClient(HttpClient httpClient)
 
         if (status == 550)
         {
+            var body = await response.Content.ReadAsStringAsync();
             ResponseException? fault = null;
             try
             {
-                fault = await response.Content.ReadFromJsonAsync<ResponseException>();
+                fault = JsonSerializer.Deserialize<ResponseException>(body, JsonSerializerOptions.Web);
             }
-            catch
+            catch (JsonException)
             {
-                // fault malformato: cade nel ramo SomethingWentWrong sotto
+                // fault malformato: cade nel ramo SomethingWentWrong via FromFault(null, ...)
             }
 
             exception = BaseException.FromFault(
                 fault?.ExceptionCode,
                 fault?.ExceptionMessage ?? "Malformed 550 fault from sidecar",
                 fault?.ExceptionDetail);
+
+            if (fault is null && !string.IsNullOrEmpty(body))
+            {
+                exception.Data["Response Body"] = body;
+            }
         }
         else if (status == 429)
         {
@@ -132,7 +139,7 @@ public static class MessagingClientExtensions
         var pubSubNoOp = Policy.NoOpAsync<HttpResponseMessage>();
 
         return services
-            .AddHttpClient<MessagingClient>(c => c.BaseAddress = new Uri(Configuration.SidecarUri))
+            .AddHttpClient<IMessagingClient, MessagingClient>(c => c.BaseAddress = new Uri(Configuration.SidecarUri))
             .AddPolicyHandler(request =>
                 request.RequestUri?.AbsolutePath.StartsWith(MessagingClient.RpcBasePath) == true
                     ? rpcRetry

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using PhotoSiMessaging;
 using PhotoSiMessaging.Exceptions;
@@ -27,5 +28,28 @@ public class MessagingEndpointsTest
         StringAssert.Contains(body, "\"ExceptionCode\":\"OBJECT_NOT_FOUND\"");
         StringAssert.Contains(body, "\"ExceptionMessage\":\"cart 42 not found\"");
         Assert.IsFalse(body.Contains("\"exceptionCode\""), "fault serialized camelCase: sls-messaging non lo decodifica");
+    }
+
+    [TestMethod]
+    public void SerializeFault_ComplexDetail_SerializedAsJsonNotTypeName()
+    {
+        var ex = new ValidationException("bad cart") { Detail = new { Id = 42 } };
+
+        var body = MessagingEndpoints.SerializeFault(ex);
+
+        // round-trip: il detail decodificato è il JSON dell'oggetto, non il nome del tipo
+        var fault = System.Text.Json.JsonSerializer.Deserialize<Exceptions.ResponseException>(body);
+        Assert.AreEqual("""{"Id":42}""", fault!.ExceptionDetail);
+    }
+
+    [DataTestMethod]
+    [DataRow(Level.Debug, LogLevel.Debug)]
+    [DataRow(Level.Info, LogLevel.Information)]
+    [DataRow(Level.Warning, LogLevel.Warning)]
+    [DataRow(Level.Error, LogLevel.Error)]
+    [DataRow(Level.Fatal, LogLevel.Critical)]
+    public void ToLogLevel_MapsFaultLevel(Level level, LogLevel expected)
+    {
+        Assert.AreEqual(expected, MessagingEndpoints.ToLogLevel(level));
     }
 }

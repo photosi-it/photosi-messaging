@@ -2,6 +2,8 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using PhotoSiMessaging.Exceptions;
 
 namespace PhotoSiMessaging;
@@ -105,6 +107,13 @@ public static class MessagingEndpoints
             }
             catch (BaseException ex) when (context.HttpContext.Request.Path.StartsWithSegments("/api/rpc"))
             {
+                // catturandola qui ASP.NET non la logga più come unhandled: senza questo log
+                // il fault arriverebbe al chiamante ma il server ne perderebbe ogni traccia
+                context.HttpContext.RequestServices
+                    .GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(typeof(MessagingEndpoints).FullName!)
+                    .Log(ToLogLevel(ex.Level), ex, "RPC handler {Path} faulted with {Code}", context.HttpContext.Request.Path.Value, ex.Code);
+
                 return Results.Text(SerializeFault(ex), "application/json", statusCode: 550);
             }
         });
@@ -121,8 +130,22 @@ public static class MessagingEndpoints
     // sls-messaging-python deserializzano il fault case-sensitive su PascalCase e altrimenti
     // si rompono (il core Rust del client python fa .unwrap() -> panic). I nostri client
     // (PhotoSiMessaging, sls-messaging-rust) sono case-insensitive, quindi PascalCase va bene a tutti.
-    internal static string SerializeFault(BaseException ex) =>
-        JsonSerializer.Serialize(new ResponseException(ex.Code, ex.Message, ex.Detail?.ToString()));
+    internal static string SerializeFault(BaseException ex)
+    {
+        // Detail complesso -> JSON, non ToString() (che darebbe solo il nome del tipo)
+        var detail = ex.Detail as string ?? (ex.Detail is null ? null : JsonSerializer.Serialize(ex.Detail));
+        return JsonSerializer.Serialize(new ResponseException(ex.Code, ex.Message, detail));
+    }
+
+    // Level del contratto fault -> LogLevel di Microsoft.Extensions.Logging
+    internal static LogLevel ToLogLevel(Level level) => level switch
+    {
+        Level.Debug => LogLevel.Debug,
+        Level.Info => LogLevel.Information,
+        Level.Warning => LogLevel.Warning,
+        Level.Fatal => LogLevel.Critical,
+        _ => LogLevel.Error,
+    };
 
     // "cart-service" / "CartService" / "cart service" -> "CART_SERVICE"
     internal static string ToConstantCase(string source)
