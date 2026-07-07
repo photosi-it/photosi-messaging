@@ -6,9 +6,9 @@ using Polly;
 
 namespace PhotoSiMessaging;
 
-public class MessagingClient(HttpClient httpClient) : IMessagingClient
+internal sealed class MessagingClient(HttpClient httpClient) : IMessagingClient
 {
-    protected internal const string RpcBasePath = "/publish/rpc/";
+    internal const string RpcBasePath = "/publish/rpc/";
     private const string PubSubBasePath = "/publish/pubsub/";
 
     public async Task<TResponse> CallAsync<TRequest, TResponse>(TRequest request, int timeoutMs = IMessagingClient.DefaultRpcTimeoutMs)
@@ -27,7 +27,7 @@ public class MessagingClient(HttpClient httpClient) : IMessagingClient
                 ?? throw new SomethingWentWrongException($"Empty RPC reply from {directory}:{name}");
         }
 
-        // camelCase come il body di PostAsJsonAsync: quello allegato all'eccezione resta replayabile
+        // camelCase, same shape PostAsJsonAsync sent: the body attached to the exception stays replayable
         throw await ToExceptionAsync(response, directory, name, JsonSerializer.Serialize(request, JsonSerializerOptions.Web));
     }
 
@@ -67,7 +67,7 @@ public class MessagingClient(HttpClient httpClient) : IMessagingClient
             }
             catch (JsonException)
             {
-                // fault malformato: cade nel ramo SomethingWentWrong via FromFault(null, ...)
+                // malformed fault: falls through to SomethingWentWrong via FromFault(null, ...)
             }
 
             exception = BaseException.FromFault(
@@ -124,14 +124,14 @@ public static class MessagingClientExtensions
 
     public static IHttpClientBuilder AddMessagingClient(this IServiceCollection services)
     {
-        // Retry SOLO sui fallimenti di trasporto (HttpRequestException), mai in base alla
-        // risposta: un 550/429 NON viene ritentato. 3 tentativi esponenziali: 0,200,400 ms.
+        // Retry ONLY on transport failures (HttpRequestException), never on the response:
+        // a 550/429 is NOT retried. 3 exponential attempts: 0, 200, 400 ms.
         var rpcRetry = Policy
             .Handle<HttpRequestException>()
             .OrResult<HttpResponseMessage>(_ => false)
             .WaitAndRetryAsync(RpcRetryCount, RpcBackoff);
 
-        // pub/sub non è idempotente: ritentare significherebbe pubblicare un duplicato -> no-op
+        // pub/sub is not idempotent: retrying would publish a duplicate -> no-op
         var pubSubNoOp = Policy.NoOpAsync<HttpResponseMessage>();
 
         return services

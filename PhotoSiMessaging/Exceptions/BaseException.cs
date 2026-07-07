@@ -9,7 +9,7 @@ public enum Level
     Fatal = 4,
 }
 
-// Codici sul filo (campo ExceptionCode del fault 550), stessi valori del PhotosiMessageClient ufficiale.
+// Wire codes (the ExceptionCode field of the 550 fault), same values as the official PhotosiMessageClient.
 public static class Code
 {
     public const string ObjectNotFound = "OBJECT_NOT_FOUND";

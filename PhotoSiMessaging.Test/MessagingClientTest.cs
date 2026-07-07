@@ -1,9 +1,10 @@
 using System.Net;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using PhotoSiMessaging.Exceptions;
 using TimeoutException = PhotoSiMessaging.Exceptions.TimeoutException;
 
-// contratti finti che rispettano la convenzione X.Y.{Directory}.Request/Response/Message
+// fake contracts that follow the X.Y.{Directory}.Request/Response/Message convention
 namespace PhotoSiMessaging.Test.CartDirectory.Request
 {
     public record Echo(string? Text);
@@ -60,7 +61,7 @@ namespace PhotoSiMessaging.Test
 
             Assert.AreEqual("HI", response.Reply);
             Assert.AreEqual("/publish/rpc/?directory=CartDirectory&name=Echo&timeout=10000", stub.LastRequest!.RequestUri!.PathAndQuery);
-            Assert.AreEqual("""{"text":"hi"}""", stub.LastBody); // camelCase sul filo, come sls
+            Assert.AreEqual("""{"text":"hi"}""", stub.LastBody); // camelCase on the wire, like sls
         }
 
         [TestMethod]
@@ -86,7 +87,7 @@ namespace PhotoSiMessaging.Test
             Assert.AreEqual("cart 42 not found", ex.Message);
             Assert.AreEqual("d", ex.Detail);
             Assert.AreEqual("CartDirectory:Echo", ex.Data["Request Type"]);
-            Assert.AreEqual("""{"text":"hi"}""", ex.Data["Request Message"]); // il body davvero inviato
+            Assert.AreEqual("""{"text":"hi"}""", ex.Data["Request Message"]); // the body actually sent
         }
 
         [TestMethod]
@@ -170,7 +171,19 @@ namespace PhotoSiMessaging.Test
                 client.PublishAsync(new CartDirectory.Message.Ping("hi")));
 
             Assert.AreEqual("CartDirectory:Ping", ex.Data["Request Type"]);
-            Assert.IsFalse(ex.Data.Contains("Request Message")); // solo CallAsync allega il body
+            Assert.IsFalse(ex.Data.Contains("Request Message")); // only CallAsync attaches the body
+        }
+
+        // MessagingClient is internal + built via ActivatorUtilities: guards that DI can still
+        // resolve the typed client through the interface
+        [TestMethod]
+        public void AddMessagingClient_ResolvesIMessagingClientFromContainer()
+        {
+            var services = new ServiceCollection();
+            services.AddMessagingClient();
+            using var provider = services.BuildServiceProvider();
+
+            Assert.IsNotNull(provider.GetRequiredService<IMessagingClient>());
         }
     }
 }

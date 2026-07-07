@@ -1,7 +1,7 @@
 namespace PhotoSiMessaging;
 
-// interna: i consumer configurano via env SIDECAR_URI, non via codice
+// internal: consumers configure it via the SIDECAR_URI env var, not in code
 internal static class Configuration
 {
-    public static string SidecarUri => Environment.GetEnvironmentVariable("SIDECAR_URI") ?? "http://localhost:8005";
+    internal static string SidecarUri => Environment.GetEnvironmentVariable("SIDECAR_URI") ?? "http://localhost:8005";
 }

@@ -1,11 +1,11 @@
 namespace PhotoSiMessaging;
 
-// Superficie mockabile del client: i consumer la iniettano e nei test la sostituiscono senza HttpClient.
+// Mockable client surface: consumers inject it and swap it in tests without touching HttpClient.
 public interface IMessagingClient
 {
     const int DefaultRpcTimeoutMs = 10_000;
 
-    // directory e name dedotti dal tipo di TRequest (3° segmento del namespace / nome del tipo)
+    // directory and name deduced from the TRequest type (3rd namespace segment / type name)
     Task<TResponse> CallAsync<TRequest, TResponse>(TRequest request, int timeoutMs = DefaultRpcTimeoutMs);
 
     Task PublishAsync<TMessage>(TMessage message, bool guaranteed = true);

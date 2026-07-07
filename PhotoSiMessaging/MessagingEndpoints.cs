@@ -8,14 +8,14 @@ using PhotoSiMessaging.Exceptions;
 
 namespace PhotoSiMessaging;
 
-// Superficie broker consumata dal sidecarmq (photosi-it/sidecarmq): il sidecar interroga
-// GET /_init all'avvio, crea code/subscription su Solace da quel contratto e consegna i
-// messaggi con una POST agli url degli handler.
+// Broker surface consumed by sidecarmq (photosi-it/sidecarmq): at startup the sidecar calls
+// GET /_init, provisions the Solace queues/subscriptions from that contract, and delivers
+// messages by POSTing to the handler urls.
 
-// PrefetchCount vale solo per le code pubSub (il sidecar lo ignora per le rpc): null = omesso dal JSON
-public record InitMessage(string ConsumerIdentifier, string Directory, string Name, int? PrefetchCount, string Type, string Url);
+// PrefetchCount applies only to pubSub queues (the sidecar ignores it for rpc): null = omitted from the JSON
+internal record InitMessage(string ConsumerIdentifier, string Directory, string Name, int? PrefetchCount, string Type, string Url);
 
-public record InitResponse(List<InitMessage> Messages);
+internal record InitResponse(List<InitMessage> Messages);
 
 public class MessagingRouteBuilder
 {
@@ -36,7 +36,7 @@ public class MessagingRouteBuilder
         return Map("pubSub", directory, name, handler, prefetchCount);
     }
 
-    // il body della risposta HTTP è la reply RPC
+    // the HTTP response body is the RPC reply
     public MessagingRouteBuilder MapRpc(string directory, string name, Delegate handler)
     {
         return Map("rpc", directory, name, handler, prefetchCount: null);
@@ -44,21 +44,21 @@ public class MessagingRouteBuilder
 
     private MessagingRouteBuilder Map(string type, string directory, string name, Delegate handler, int? prefetchCount)
     {
-        // route ed entry di /_init derivano dalla stessa chiamata: non possono divergere
+        // route and /_init entry come from the same call: they cannot diverge
         var message = BuildInitMessage(_consumerTag, type, directory, name, prefetchCount);
         _group.MapPost(message.Url, handler);
         _messages.Add(message);
         return this;
     }
 
-    public static InitMessage BuildInitMessage(string consumerTag, string type, string directory, string name, int? prefetchCount)
+    internal static InitMessage BuildInitMessage(string consumerTag, string type, string directory, string name, int? prefetchCount)
     {
         return new InitMessage(
             ConsumerIdentifier: $"{consumerTag}/{directory}/{name}",
             Directory: directory,
             Name: name,
             PrefetchCount: prefetchCount,
-            Type: type, // stringhe su cui il sidecar fa switch: "pubSub" / "rpc"
+            Type: type, // strings the sidecar switches on: "pubSub" / "rpc"
             Url: $"/api/{type}/{directory}/{name}");
     }
 }
@@ -67,14 +67,14 @@ public static class MessagingEndpoints
 {
     private const int DefaultPort = 8081;
 
-    // Mappa i subscriber + GET /_init e registra il listener dedicato.
-    // Tutto è escluso da OpenAPI e risponde solo sulla porta di messaggistica: esponi solo
-    // la porta pubblica sul Service k8s e queste route restano raggiungibili solo dal
-    // sidecar via localhost.
+    // Maps the subscribers + GET /_init and registers the dedicated listener.
+    // Everything is excluded from OpenAPI and answers only on the messaging port: expose only
+    // the public port on the k8s Service and these routes stay reachable solely by the sidecar
+    // over localhost.
     //
-    // consumerTag: default = SERVICE_NAME (env, presente in ogni deployment) in CONSTANT_CASE,
-    // es. "cart-service" -> "CART_SERVICE". Finisce nei nomi delle code Solace: rinominarlo
-    // significa code nuove, quindi passalo esplicito se SERVICE_NAME può cambiare.
+    // consumerTag: default = SERVICE_NAME (env, present in every deployment) in CONSTANT_CASE,
+    // e.g. "cart-service" -> "CART_SERVICE". It ends up in the Solace queue names: renaming it
+    // means new queues, so pass it explicitly if SERVICE_NAME can change.
     public static void MapMessaging(this WebApplication app, Action<MessagingRouteBuilder> subscribers, string? consumerTag = null, int port = DefaultPort)
     {
         consumerTag ??= ToConstantCase(Environment.GetEnvironmentVariable("SERVICE_NAME") ?? app.Environment.ApplicationName);
@@ -93,11 +93,11 @@ public static class MessagingEndpoints
             return await next(context);
         });
 
-        // Complemento server del giro tipizzato: un handler RPC che lancia una BaseException
-        // deve rispondere 550 + {ExceptionCode,...} (contratto letto da MessagingClient.FromFault
-        // e da sls-messaging), non lasciar degenerare in 500 -> SOMETHING_WENT_WRONG.
-        // Solo per le RPC: nel pub/sub non c'è un chiamante in attesa, quindi lasciamo risalire
-        // (500 -> il sidecar non ackerà -> redelivery).
+        // Server half of the typed round-trip: an RPC handler that throws a BaseException must
+        // answer 550 + {ExceptionCode,...} (the contract read by MessagingClient.FromFault and by
+        // sls-messaging), not degrade into a 500 -> SOMETHING_WENT_WRONG.
+        // RPC only: in pub/sub there is no caller awaiting a reply, so we let it bubble
+        // (500 -> the sidecar won't ack -> redelivery).
         group.AddEndpointFilter(async (context, next) =>
         {
             try
@@ -106,8 +106,8 @@ public static class MessagingEndpoints
             }
             catch (BaseException ex) when (context.HttpContext.Request.Path.StartsWithSegments("/api/rpc"))
             {
-                // catturandola qui ASP.NET non la logga più come unhandled: senza questo log
-                // il fault arriverebbe al chiamante ma il server ne perderebbe ogni traccia
+                // catching it here means ASP.NET no longer logs it as unhandled: without this
+                // log the fault would reach the caller but the server would lose every trace of it
                 context.HttpContext.RequestServices
                     .GetRequiredService<ILoggerFactory>()
                     .CreateLogger(typeof(MessagingEndpoints).FullName!)
@@ -124,14 +124,14 @@ public static class MessagingEndpoints
         group.MapGet("/_init", () => Results.Ok(init));
     }
 
-    // Fault 550 serializzato in PascalCase (ExceptionCode/...) con le opzioni DI DEFAULT di
-    // System.Text.Json, NON i Web defaults camelCase di ASP.NET: sls-messaging (C#) e
-    // sls-messaging-python deserializzano il fault case-sensitive su PascalCase e altrimenti
-    // si rompono (il core Rust del client python fa .unwrap() -> panic). I nostri client
-    // (PhotoSiMessaging, sls-messaging-rust) sono case-insensitive, quindi PascalCase va bene a tutti.
+    // 550 fault serialized in PascalCase (ExceptionCode/...) with System.Text.Json's DEFAULT
+    // options, NOT ASP.NET's camelCase web defaults: sls-messaging (C#) and sls-messaging-python
+    // deserialize the fault case-sensitively on PascalCase and otherwise break (the python
+    // client's Rust core .unwrap()s -> panic). Our clients (PhotoSiMessaging, sls-messaging-rust)
+    // are case-insensitive, so PascalCase works for everyone.
     internal static string SerializeFault(BaseException ex)
     {
-        // Detail complesso -> JSON, non ToString() (che darebbe solo il nome del tipo)
+        // complex Detail -> JSON, not ToString() (which would give only the type name)
         var detail = ex.Detail as string ?? (ex.Detail is null ? null : JsonSerializer.Serialize(ex.Detail));
         return JsonSerializer.Serialize(new ResponseException(ex.Code, ex.Message, detail));
     }

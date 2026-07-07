@@ -18,8 +18,8 @@ public class MessagingEndpointsTest
         Assert.AreEqual(expected, MessagingEndpoints.ToConstantCase(source));
     }
 
-    // Il fault 550 DEVE uscire in PascalCase: sls-messaging (C#) e sls-messaging-python
-    // deserializzano case-sensitive su ExceptionCode/ExceptionMessage/ExceptionDetail.
+    // The 550 fault MUST come out in PascalCase: sls-messaging (C#) and sls-messaging-python
+    // deserialize case-sensitively on ExceptionCode/ExceptionMessage/ExceptionDetail.
     [TestMethod]
     public void SerializeFault_EmitsPascalCaseFields()
     {
@@ -27,7 +27,7 @@ public class MessagingEndpointsTest
 
         StringAssert.Contains(body, "\"ExceptionCode\":\"OBJECT_NOT_FOUND\"");
         StringAssert.Contains(body, "\"ExceptionMessage\":\"cart 42 not found\"");
-        Assert.IsFalse(body.Contains("\"exceptionCode\""), "fault serialized camelCase: sls-messaging non lo decodifica");
+        Assert.IsFalse(body.Contains("\"exceptionCode\""), "fault serialized camelCase: sls-messaging can't decode it");
     }
 
     [TestMethod]
@@ -37,9 +37,30 @@ public class MessagingEndpointsTest
 
         var body = MessagingEndpoints.SerializeFault(ex);
 
-        // round-trip: il detail decodificato è il JSON dell'oggetto, non il nome del tipo
+        // round-trip: the decoded detail is the object's JSON, not the type name
         var fault = System.Text.Json.JsonSerializer.Deserialize<Exceptions.ResponseException>(body);
         Assert.AreEqual("""{"Id":42}""", fault!.ExceptionDetail);
+    }
+
+    // guards the /_init contract consumed by sidecarmq: field values, the url template, and the
+    // exact "pubSub"/"rpc" type strings its solace-consumer.js switches on
+    [TestMethod]
+    public void BuildInitMessage_PubSub_MatchesSidecarContract()
+    {
+        var m = MessagingRouteBuilder.BuildInitMessage("CART_SERVICE", "pubSub", "CartServiceDirectory", "TestPubSub", 10);
+
+        Assert.AreEqual("/api/pubSub/CartServiceDirectory/TestPubSub", m.Url);
+        Assert.AreEqual("CART_SERVICE/CartServiceDirectory/TestPubSub", m.ConsumerIdentifier);
+        Assert.IsTrue(m is { Type: "pubSub", PrefetchCount: 10, Directory: "CartServiceDirectory", Name: "TestPubSub" });
+    }
+
+    [TestMethod]
+    public void BuildInitMessage_Rpc_OmitsPrefetchCount()
+    {
+        var m = MessagingRouteBuilder.BuildInitMessage("CART_SERVICE", "rpc", "CartServiceDirectory", "TestRpc", null);
+
+        Assert.AreEqual("/api/rpc/CartServiceDirectory/TestRpc", m.Url);
+        Assert.IsTrue(m is { Type: "rpc", Directory: "CartServiceDirectory", Name: "TestRpc", PrefetchCount: null });
     }
 
     [DataTestMethod]

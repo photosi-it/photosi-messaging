@@ -1,3 +1,3 @@
 namespace PhotoSiMessaging.Exceptions;
 
-public record ResponseException(string? ExceptionCode, string? ExceptionMessage, string? ExceptionDetail);
+internal record ResponseException(string? ExceptionCode, string? ExceptionMessage, string? ExceptionDetail);
