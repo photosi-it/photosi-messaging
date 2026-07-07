@@ -1,9 +1,14 @@
 name: publish
 
-# GoCD equivalent (sls-messaging-net): build Release + pack + push the NuGet package.
-# GoCD targets PhotoSi's GitLab feed with a NUGET_PASSWORD secret; here we publish to
-# GitHub Packages (nuget.pkg.github.com/photosi-it) with the built-in GITHUB_TOKEN, no
-# secret setup. To target the GitLab feed instead, see the commented step at the bottom.
+# Publishes to PhotoSi's GitLab NuGet feed (project 24719592) — the same feed as SlsMessaging
+# and the other PhotoSi packages, so services consume it with their usual nuget.config.
+#
+# Requires a repo secret NUGET_PASSWORD holding the GitLab WRITE credential (the same one GoCD
+# uses, user 'package-repository-read-write'). GitLab authenticates via HTTP Basic (username +
+# password), not the NuGet api-key, so we register the source with credentials before pushing.
+#
+# --skip-duplicate makes re-runs idempotent; a real publish happens only when <Version> in the
+# csproj is bumped (the feed rejects overwriting an existing version).
 on:
   push:
     branches: [master]
@@ -14,7 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -28,21 +32,11 @@ jobs:
       - name: Pack
         run: dotnet pack PhotoSiMessaging/PhotoSiMessaging.csproj -c Release -o artifacts
 
-      # --skip-duplicate: re-runs are idempotent; a real publish happens only when
-      # <Version> in the csproj is bumped (NuGet feeds reject overwriting a version).
-      - name: Push to GitHub Packages
-        run: >
-          dotnet nuget push "artifacts/*.nupkg"
-          --source https://nuget.pkg.github.com/photosi-it/index.json
-          --api-key ${{ secrets.GITHUB_TOKEN }}
-          --skip-duplicate
-
-      # To publish to PhotoSi's GitLab feed instead (as GoCD does), add a NUGET_PASSWORD
-      # repo secret and replace the step above with:
-      #
-      # - name: Push to GitLab
-      #   run: >
-      #     dotnet nuget push "artifacts/*.nupkg"
-      #     --source https://gitlab.com/api/v4/projects/24719592/packages/nuget/index.json
-      #     --api-key ${{ secrets.NUGET_PASSWORD }}
-      #     --skip-duplicate
+      - name: Push to PhotoSi GitLab feed
+        run: |
+          dotnet nuget add source https://gitlab.com/api/v4/projects/24719592/packages/nuget/index.json \
+            --name gitlab \
+            --username package-repository-read-write \
+            --password "${{ secrets.NUGET_PASSWORD }}" \
+            --store-password-in-clear-text
+          dotnet nuget push "artifacts/*.nupkg" --source gitlab --skip-duplicate
