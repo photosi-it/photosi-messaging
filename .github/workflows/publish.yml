@@ -1,0 +1,48 @@
+name: publish
+
+# GoCD equivalent (sls-messaging-net): build Release + pack + push the NuGet package.
+# GoCD targets PhotoSi's GitLab feed with a NUGET_PASSWORD secret; here we publish to
+# GitHub Packages (nuget.pkg.github.com/anicolini) with the built-in GITHUB_TOKEN, no
+# secret setup. To target the GitLab feed instead, see the commented step at the bottom.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Test
+        run: dotnet test -c Release
+
+      - name: Pack
+        run: dotnet pack PhotoSiMessaging/PhotoSiMessaging.csproj -c Release -o artifacts
+
+      # --skip-duplicate: re-runs are idempotent; a real publish happens only when
+      # <Version> in the csproj is bumped (NuGet feeds reject overwriting a version).
+      - name: Push to GitHub Packages
+        run: >
+          dotnet nuget push "artifacts/*.nupkg"
+          --source https://nuget.pkg.github.com/anicolini/index.json
+          --api-key ${{ secrets.GITHUB_TOKEN }}
+          --skip-duplicate
+
+      # To publish to PhotoSi's GitLab feed instead (as GoCD does), add a NUGET_PASSWORD
+      # repo secret and replace the step above with:
+      #
+      # - name: Push to GitLab
+      #   run: >
+      #     dotnet nuget push "artifacts/*.nupkg"
+      #     --source https://gitlab.com/api/v4/projects/24719592/packages/nuget/index.json
+      #     --api-key ${{ secrets.NUGET_PASSWORD }}
+      #     --skip-duplicate
