@@ -1,24 +1,18 @@
 using System.Net.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
 using PhotoSiMessaging.Exceptions;
+using Polly;
 
 namespace PhotoSiMessaging;
 
-// Pubblicazione/RPC in uscita attraverso il bridge HTTP del sidecarmq (http-proxy.js), NON
-// il gateway REST di Solace: POST {SIDECAR_URI}/publish/rpc|pubsub/?directory=X&name=Y.
-//
-// Gestione errori (come nel PhotosiMessageClient ufficiale):
-//   550 -> eccezione tipizzata dal fault ({ExceptionCode,...}) via BaseException.FromFault
-//   429 -> TooManyRequestsException (bridge/broker in throttling)
-//   altri non-2xx -> SomethingWentWrongException, con Request Type/Body in Exception.Data
 public class MessagingClient(HttpClient httpClient)
 {
-    private const int DefaultRpcTimeoutMs = 10_000; // sidecar DEFAULT_RPC_TIMEOUT
+    // path del bridge sidecar; usati anche dal selettore di policy retry (non possono divergere)
+    public const string RpcBasePath = "/publish/rpc/";
+    public const string PubSubBasePath = "/publish/pubsub/";
 
-    // Directory e name si deducono dal namespace del tipo TRequest, come in SlsMessaging:
-    // "CartService.Directory.CartServiceDirectory.Request.TestRpc" -> directory = terzo
-    // segmento ("CartServiceDirectory"), name = nome classe ("TestRpc").
-    // Topic PhotosiMessage.{directory}:Request.{name}.
+    private const int DefaultRpcTimeoutMs = 10_000;
+
     public async Task<TResponse> CallAsync<TRequest, TResponse>(TRequest request, int timeoutMs = DefaultRpcTimeoutMs)
     {
         var requestType = typeof(TRequest);
@@ -26,7 +20,7 @@ public class MessagingClient(HttpClient httpClient)
         var name = requestType.Name;
 
         var response = await httpClient.PostAsJsonAsync(
-            $"/publish/rpc/?directory={Uri.EscapeDataString(directory)}&name={Uri.EscapeDataString(name)}&timeout={timeoutMs}",
+            $"{RpcBasePath}?directory={Uri.EscapeDataString(directory)}&name={Uri.EscapeDataString(name)}&timeout={timeoutMs}",
             request);
 
         if (response.IsSuccessStatusCode)
@@ -44,7 +38,7 @@ public class MessagingClient(HttpClient httpClient)
         var directory = GetDirectory(messageType);
         var name = messageType.Name;
 
-        var url = $"/publish/pubsub/?directory={Uri.EscapeDataString(directory)}&name={Uri.EscapeDataString(name)}";
+        var url = $"{PubSubBasePath}?directory={Uri.EscapeDataString(directory)}&name={Uri.EscapeDataString(name)}";
         if (!guaranteed)
         {
             url += "&guaranteed=0";
@@ -116,14 +110,28 @@ public class MessagingClient(HttpClient httpClient)
 
 public static class MessagingClientExtensions
 {
-    public static IServiceCollection AddMessagingClient(this IServiceCollection services)
+    // Typed client via IHttpClientFactory (gestisce lui la rotazione degli handler), col retry
+    // Polly agganciato come nel PhotosiMessageClient ufficiale.
+    public static IHttpClientBuilder AddMessagingClient(this IServiceCollection services)
     {
-        services.AddSingleton(_ => new MessagingClient(
-            new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromSeconds(2) })
-            {
-                BaseAddress = new Uri(Configuration.SidecarUri)
-            }));
+        // Retry SOLO sui fallimenti di trasporto (HttpRequestException), mai in base alla
+        // risposta: un 550/429 NON viene ritentato. 6 tentativi esponenziali: 0,200,400,800,1600,3200 ms.
+        var rpcRetry = Policy
+            .Handle<HttpRequestException>()
+            .OrResult<HttpResponseMessage>(_ => false)
+            .WaitAndRetryAsync(6, RpcBackoff);
 
-        return services;
+        // pub/sub non è idempotente: ritentare significherebbe pubblicare un duplicato -> no-op
+        var pubSubNoOp = Policy.NoOpAsync<HttpResponseMessage>();
+
+        return services
+            .AddHttpClient<MessagingClient>(c => c.BaseAddress = new Uri(Configuration.SidecarUri))
+            .AddPolicyHandler(request =>
+                request.RequestUri?.AbsolutePath.StartsWith(MessagingClient.RpcBasePath) == true
+                    ? rpcRetry
+                    : pubSubNoOp);
     }
+
+    private static TimeSpan RpcBackoff(int retry) =>
+        TimeSpan.FromMilliseconds(retry > 1 ? 100 * Math.Pow(2, retry - 1) : 0);
 }

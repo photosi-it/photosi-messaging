@@ -31,9 +31,7 @@ public abstract class BaseException(string message, Level level, Exception? inne
     public Level Level { get; set; } = level;
 
     public object? Detail { get; set; }
-
-    // Ricostruisce l'eccezione tipizzata dal fault 550 del sidecar
-    // ({ExceptionCode, ExceptionMessage, ExceptionDetail}). Codice sconosciuto -> SomethingWentWrong.
+    
     internal static BaseException FromFault(string? code, string? exceptionMessage, string? exceptionDetail)
     {
         var message = string.IsNullOrEmpty(exceptionMessage) ? "(no message)" : exceptionMessage;
