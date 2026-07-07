@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using PhotoSiMessaging.Exceptions;
 
 namespace PhotoSiMessaging;
 
@@ -90,6 +92,23 @@ public static class MessagingEndpoints
             return await next(context);
         });
 
+        // Complemento server del giro tipizzato: un handler RPC che lancia una BaseException
+        // deve rispondere 550 + {ExceptionCode,...} (contratto letto da MessagingClient.FromFault
+        // e da sls-messaging), non lasciar degenerare in 500 -> SOMETHING_WENT_WRONG.
+        // Solo per le RPC: nel pub/sub non c'è un chiamante in attesa, quindi lasciamo risalire
+        // (500 -> il sidecar non ackerà -> redelivery).
+        group.AddEndpointFilter(async (context, next) =>
+        {
+            try
+            {
+                return await next(context);
+            }
+            catch (BaseException ex) when (context.HttpContext.Request.Path.StartsWithSegments("/api/rpc"))
+            {
+                return Results.Text(SerializeFault(ex), "application/json", statusCode: 550);
+            }
+        });
+
         var builder = new MessagingRouteBuilder(group, consumerTag);
         subscribers(builder);
 
@@ -97,6 +116,13 @@ public static class MessagingEndpoints
         group.MapGet("/_init", () => Results.Ok(init));
     }
 
+    // Fault 550 serializzato in PascalCase (ExceptionCode/...) con le opzioni DI DEFAULT di
+    // System.Text.Json, NON i Web defaults camelCase di ASP.NET: sls-messaging (C#) e
+    // sls-messaging-python deserializzano il fault case-sensitive su PascalCase e altrimenti
+    // si rompono (il core Rust del client python fa .unwrap() -> panic). I nostri client
+    // (PhotoSiMessaging, sls-messaging-rust) sono case-insensitive, quindi PascalCase va bene a tutti.
+    internal static string SerializeFault(BaseException ex) =>
+        JsonSerializer.Serialize(new ResponseException(ex.Code, ex.Message, ex.Detail?.ToString()));
 
     // "cart-service" / "CartService" / "cart service" -> "CART_SERVICE"
     internal static string ToConstantCase(string source)

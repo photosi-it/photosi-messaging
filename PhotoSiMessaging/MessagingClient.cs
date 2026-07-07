@@ -8,9 +8,9 @@ namespace PhotoSiMessaging;
 
 public class MessagingClient(HttpClient httpClient)
 {
-    public const string RpcBasePath = "/publish/rpc/";
-    public const string PubSubBasePath = "/publish/pubsub/";
-    
+    protected internal const string RpcBasePath = "/publish/rpc/";
+    private const string PubSubBasePath = "/publish/pubsub/";
+
     private const int DefaultRpcTimeoutMs = 10_000;
 
     public async Task<TResponse> CallAsync<TRequest, TResponse>(TRequest request, int timeoutMs = DefaultRpcTimeoutMs)
@@ -94,13 +94,14 @@ public class MessagingClient(HttpClient httpClient)
         {
             exception.Data["Request Message"] = requestMessage;
         }
+
         return exception;
     }
 
     private static string GetDirectory(Type messageType)
     {
         var ns = messageType.Namespace
-            ?? throw new ArgumentException($"{messageType.Name} must declare a namespace shaped as X.Y.{{Directory}}.Request/Response/Message");
+                 ?? throw new ArgumentException($"{messageType.Name} must declare a namespace shaped as X.Y.{{Directory}}.Request/Response/Message");
         var segments = ns.Split('.');
 
         if (segments.Length < 3)
@@ -139,5 +140,7 @@ public static class MessagingClientExtensions
     }
 
     private static TimeSpan RpcBackoff(int retry) =>
-        TimeSpan.FromMilliseconds(retry > 1 ? 100 * Math.Pow(2, retry - 1) : 0);
+        TimeSpan.FromMilliseconds(retry > 1
+            ? 100 * Math.Pow(2, retry - 1)
+            : 0);
 }
