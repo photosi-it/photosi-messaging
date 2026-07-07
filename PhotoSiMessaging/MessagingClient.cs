@@ -8,10 +8,9 @@ namespace PhotoSiMessaging;
 
 public class MessagingClient(HttpClient httpClient)
 {
-    // path del bridge sidecar; usati anche dal selettore di policy retry (non possono divergere)
     public const string RpcBasePath = "/publish/rpc/";
     public const string PubSubBasePath = "/publish/pubsub/";
-
+    
     private const int DefaultRpcTimeoutMs = 10_000;
 
     public async Task<TResponse> CallAsync<TRequest, TResponse>(TRequest request, int timeoutMs = DefaultRpcTimeoutMs)
@@ -115,16 +114,18 @@ public class MessagingClient(HttpClient httpClient)
 
 public static class MessagingClientExtensions
 {
+    private const int RpcRetryCount = 3;
+
     // Typed client via IHttpClientFactory (gestisce lui la rotazione degli handler), col retry
     // Polly agganciato come nel PhotosiMessageClient ufficiale.
     public static IHttpClientBuilder AddMessagingClient(this IServiceCollection services)
     {
         // Retry SOLO sui fallimenti di trasporto (HttpRequestException), mai in base alla
-        // risposta: un 550/429 NON viene ritentato. 6 tentativi esponenziali: 0,200,400,800,1600,3200 ms.
+        // risposta: un 550/429 NON viene ritentato. 3 tentativi esponenziali: 0,200,400 ms.
         var rpcRetry = Policy
             .Handle<HttpRequestException>()
             .OrResult<HttpResponseMessage>(_ => false)
-            .WaitAndRetryAsync(3, RpcBackoff);
+            .WaitAndRetryAsync(RpcRetryCount, RpcBackoff);
 
         // pub/sub non è idempotente: ritentare significherebbe pubblicare un duplicato -> no-op
         var pubSubNoOp = Policy.NoOpAsync<HttpResponseMessage>();
