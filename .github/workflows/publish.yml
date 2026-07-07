@@ -2,7 +2,7 @@ name: publish
 
 # GoCD equivalent (sls-messaging-net): build Release + pack + push the NuGet package.
 # GoCD targets PhotoSi's GitLab feed with a NUGET_PASSWORD secret; here we publish to
-# GitHub Packages (nuget.pkg.github.com/anicolini) with the built-in GITHUB_TOKEN, no
+# GitHub Packages (nuget.pkg.github.com/photosi-it) with the built-in GITHUB_TOKEN, no
 # secret setup. To target the GitLab feed instead, see the commented step at the bottom.
 on:
   push:
@@ -33,7 +33,7 @@ jobs:
       - name: Push to GitHub Packages
         run: >
           dotnet nuget push "artifacts/*.nupkg"
-          --source https://nuget.pkg.github.com/anicolini/index.json
+          --source https://nuget.pkg.github.com/photosi-it/index.json
           --api-key ${{ secrets.GITHUB_TOKEN }}
           --skip-duplicate
 
