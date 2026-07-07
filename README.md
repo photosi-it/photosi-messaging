@@ -8,7 +8,7 @@ Libreria ASP.NET per parlare col **sidecarmq** PhotoSi. Due mattoni indipendenti
 - **`MessagingClient`** — uscita: pubblichi eventi e fai RPC verso altri servizi passando dal
   bridge HTTP del sidecar, non dal gateway REST di Solace.
 
-Target: `net8.0` e `net10.0`.
+Target: `net10.0`.
 
 ## Install
 
