@@ -29,7 +29,6 @@ namespace PhotoSiMessaging.Test
     [TestClass]
     public class MessagingClientTest
     {
-        // intercetta la richiesta e risponde a copione: niente rete, niente sidecar
         private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
         {
             public HttpRequestMessage? LastRequest { get; private set; }

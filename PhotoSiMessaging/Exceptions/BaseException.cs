@@ -9,8 +9,7 @@ public enum Level
     Fatal = 4,
 }
 
-// Codici sul filo (campo ExceptionCode del fault 550), stessi valori del PhotosiMessageClient
-// ufficiale. Rimossi DATABASE_ROW_LOCKED / DATABASE_CONCURRENCY; aggiunto TOO_MANY_REQUESTS.
+// Codici sul filo (campo ExceptionCode del fault 550), stessi valori del PhotosiMessageClient ufficiale.
 public static class Code
 {
     public const string ObjectNotFound = "OBJECT_NOT_FOUND";

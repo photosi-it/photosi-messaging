@@ -27,12 +27,10 @@ public class MessagingClient(HttpClient httpClient) : IMessagingClient
                 ?? throw new SomethingWentWrongException($"Empty RPC reply from {directory}:{name}");
         }
 
-        // Web options = camelCase: la stessa forma spedita da PostAsJsonAsync, così il body
-        // allegato all'eccezione è riutilizzabile per un replay tale e quale
+        // camelCase come il body di PostAsJsonAsync: quello allegato all'eccezione resta replayabile
         throw await ToExceptionAsync(response, directory, name, JsonSerializer.Serialize(request, JsonSerializerOptions.Web));
     }
 
-    // topic PhotosiMessage.{directory}:Message.{name}; 204 al successo. Stessa deduzione di CallAsync.
     public async Task PublishAsync<TMessage>(TMessage message, bool guaranteed = true)
     {
         var messageType = typeof(TMessage);
@@ -124,8 +122,6 @@ public static class MessagingClientExtensions
 {
     private const int RpcRetryCount = 3;
 
-    // Typed client via IHttpClientFactory (gestisce lui la rotazione degli handler), col retry
-    // Polly agganciato come nel PhotosiMessageClient ufficiale.
     public static IHttpClientBuilder AddMessagingClient(this IServiceCollection services)
     {
         // Retry SOLO sui fallimenti di trasporto (HttpRequestException), mai in base alla

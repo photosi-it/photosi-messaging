@@ -31,13 +31,12 @@ public class MessagingRouteBuilder
 
     internal IReadOnlyList<InitMessage> Messages => _messages;
 
-    // topic PhotosiMessage.{directory}:Message.{name}
     public MessagingRouteBuilder MapPubSub(string directory, string name, Delegate handler, int prefetchCount = 10)
     {
         return Map("pubSub", directory, name, handler, prefetchCount);
     }
 
-    // topic PhotosiMessage.{directory}:Request.{name}; il body della risposta HTTP è la reply RPC
+    // il body della risposta HTTP è la reply RPC
     public MessagingRouteBuilder MapRpc(string directory, string name, Delegate handler)
     {
         return Map("rpc", directory, name, handler, prefetchCount: null);
@@ -60,7 +59,7 @@ public class MessagingRouteBuilder
             Name: name,
             PrefetchCount: prefetchCount,
             Type: type, // stringhe su cui il sidecar fa switch: "pubSub" / "rpc"
-            Url: $"/api/{type}/{directory}/{name}"); // convenzione di path stile legacy-flow
+            Url: $"/api/{type}/{directory}/{name}");
     }
 }
 
@@ -137,7 +136,6 @@ public static class MessagingEndpoints
         return JsonSerializer.Serialize(new ResponseException(ex.Code, ex.Message, detail));
     }
 
-    // Level del contratto fault -> LogLevel di Microsoft.Extensions.Logging
     internal static LogLevel ToLogLevel(Level level) => level switch
     {
         Level.Debug => LogLevel.Debug,
