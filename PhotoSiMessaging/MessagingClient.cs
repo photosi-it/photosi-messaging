@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using PhotoSiMessaging.Exceptions;
 using Polly;
@@ -28,7 +29,7 @@ public class MessagingClient(HttpClient httpClient)
             return (await response.Content.ReadFromJsonAsync<TResponse>())!;
         }
 
-        throw await ToExceptionAsync(response, directory, name);
+        throw await ToExceptionAsync(response, directory, name, JsonSerializer.Serialize(request));
     }
 
     // topic PhotosiMessage.{directory}:Message.{name}; 204 al successo. Stessa deduzione di CallAsync.
@@ -53,7 +54,7 @@ public class MessagingClient(HttpClient httpClient)
     }
 
 
-    private static async Task<BaseException> ToExceptionAsync(HttpResponseMessage response, string directory, string name)
+    private static async Task<BaseException> ToExceptionAsync(HttpResponseMessage response, string directory, string name, string? requestMessage = null)
     {
         var status = (int)response.StatusCode;
         BaseException exception;
@@ -90,6 +91,10 @@ public class MessagingClient(HttpClient httpClient)
         }
 
         exception.Data["Request Type"] = $"{directory}:{name}";
+        if (requestMessage is not null)
+        {
+            exception.Data["Request Message"] = requestMessage;
+        }
         return exception;
     }
 
@@ -119,7 +124,7 @@ public static class MessagingClientExtensions
         var rpcRetry = Policy
             .Handle<HttpRequestException>()
             .OrResult<HttpResponseMessage>(_ => false)
-            .WaitAndRetryAsync(6, RpcBackoff);
+            .WaitAndRetryAsync(3, RpcBackoff);
 
         // pub/sub non è idempotente: ritentare significherebbe pubblicare un duplicato -> no-op
         var pubSubNoOp = Policy.NoOpAsync<HttpResponseMessage>();
