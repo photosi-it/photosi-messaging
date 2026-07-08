@@ -1,0 +1,58 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+
+namespace PhotoSiMessaging.Test;
+
+[TestClass]
+public class JobsTest
+{
+    private static MessagingRouteBuilder NewBuilder()
+    {
+        var app = WebApplication.CreateBuilder().Build();
+        return new MessagingRouteBuilder(app.MapGroup(""), "CART_SERVICE");
+    }
+
+    // A job is a plain pubSub subscriber (queue -> exactly one replica) plus a recorded definition.
+    [TestMethod]
+    public void MapJob_RegistersPubSubRouteAndDefinition()
+    {
+        var builder = NewBuilder();
+
+        builder.MapJob("CartDirectory", "RecalculateTotals", "0 3 * * *", () => "ok");
+
+        var message = builder.Messages.Single();
+        Assert.AreEqual("pubSub", message.Type);
+        Assert.AreEqual("/api/pubSub/CartDirectory/RecalculateTotals", message.Url);
+
+        var job = builder.Jobs.Single();
+        Assert.AreEqual("0 3 * * *", job.Cron);
+        Assert.AreEqual(JobConcurrency.Forbid, job.Concurrency); // safe default
+        Assert.IsNull(job.Payload);
+    }
+
+    // Guards the JSON contract consumed by the deploy pipeline to materialize the CronJobs.
+    [TestMethod]
+    public void SerializeJobs_EmitsPipelineContract()
+    {
+        var builder = NewBuilder();
+        builder.MapJob("CartDirectory", "RecalculateTotals", "*/15 * * * *", () => "ok",
+            JobConcurrency.Replace, payload: new { ReportTypes = new[] { "Confirm" } });
+
+        var json = MessagingEndpoints.SerializeJobs(builder.Jobs);
+
+        StringAssert.Contains(json, "\"directory\":\"CartDirectory\"");
+        StringAssert.Contains(json, "\"name\":\"RecalculateTotals\"");
+        StringAssert.Contains(json, "\"cron\":\"*/15 * * * *\"");
+        StringAssert.Contains(json, "\"concurrency\":\"Replace\"");
+        StringAssert.Contains(json, "\"topic\":\"PhotosiMessage.CartDirectory:Message.RecalculateTotals\"");
+        StringAssert.Contains(json, "\"reportTypes\":[\"Confirm\"]"); // payload on the wire like every message: camelCase
+    }
+
+    [TestMethod]
+    public void SerializeJobs_Empty_EmitsEmptyList()
+    {
+        var json = MessagingEndpoints.SerializeJobs([]);
+
+        Assert.AreEqual("""{"jobs":[]}""", json);
+    }
+}

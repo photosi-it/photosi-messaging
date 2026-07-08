@@ -17,11 +17,23 @@ internal record InitMessage(string ConsumerIdentifier, string Directory, string 
 
 internal record InitResponse(List<InitMessage> Messages);
 
+// Maps 1:1 onto the k8s CronJob concurrencyPolicy.
+public enum JobConcurrency
+{
+    Allow,
+    Forbid,
+    Replace,
+}
+
+// A MapJob declaration: exported by --dump-jobs, materialized as a k8s CronJob by the deploy pipeline.
+internal sealed record JobDefinition(string Directory, string Name, string Cron, JobConcurrency Concurrency, string? Payload);
+
 public class MessagingRouteBuilder
 {
     private readonly RouteGroupBuilder _group;
     private readonly string _consumerTag;
     private readonly List<InitMessage> _messages = [];
+    private readonly List<JobDefinition> _jobs = [];
 
     internal MessagingRouteBuilder(RouteGroupBuilder group, string consumerTag)
     {
@@ -30,6 +42,8 @@ public class MessagingRouteBuilder
     }
 
     internal IReadOnlyList<InitMessage> Messages => _messages;
+
+    internal IReadOnlyList<JobDefinition> Jobs => _jobs;
 
     public MessagingRouteBuilder MapPubSub(string directory, string name, Delegate handler, int prefetchCount = 10)
     {
@@ -40,6 +54,19 @@ public class MessagingRouteBuilder
     public MessagingRouteBuilder MapRpc(string directory, string name, Delegate handler)
     {
         return Map("rpc", directory, name, handler, prefetchCount: null);
+    }
+
+    // Scheduled job. The handler is a plain pubSub subscriber — the broker queue guarantees the
+    // tick runs on exactly ONE replica. The schedule itself lives in a k8s CronJob that publishes
+    // the trigger message: the deploy pipeline materializes/reconciles it from `--dump-jobs`
+    // (cron expression, concurrency policy and optional payload sent as the message body).
+    public MessagingRouteBuilder MapJob(string directory, string name, string cron, Delegate handler,
+        JobConcurrency concurrency = JobConcurrency.Forbid, object? payload = null)
+    {
+        MapPubSub(directory, name, handler);
+        _jobs.Add(new JobDefinition(directory, name, cron, concurrency,
+            payload is null ? null : JsonSerializer.Serialize(payload, JsonSerializerOptions.Web)));
+        return this;
     }
 
     private MessagingRouteBuilder Map(string type, string directory, string name, Delegate handler, int? prefetchCount)
@@ -120,8 +147,35 @@ public static class MessagingEndpoints
         var builder = new MessagingRouteBuilder(group, consumerTag);
         subscribers(builder);
 
+        // CLI contract for the deploy pipeline: `dotnet <Service>.dll --dump-jobs` prints the
+        // declared jobs as JSON and exits, so the pipeline can materialize/reconcile the k8s
+        // CronJobs that publish each job's trigger message.
+        if (Environment.GetCommandLineArgs().Contains("--dump-jobs"))
+        {
+            Console.WriteLine(SerializeJobs(builder.Jobs));
+            Environment.Exit(0);
+        }
+
         var init = new InitResponse(builder.Messages.ToList());
         group.MapGet("/_init", () => Results.Ok(init));
+    }
+
+    // Stable JSON contract consumed by the deploy pipeline (--dump-jobs). topic is the exact
+    // Solace destination the CronJob curl publishes to.
+    internal static string SerializeJobs(IReadOnlyList<JobDefinition> jobs)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            jobs = jobs.Select(job => new
+            {
+                directory = job.Directory,
+                name = job.Name,
+                cron = job.Cron,
+                concurrency = job.Concurrency.ToString(),
+                topic = $"PhotosiMessage.{job.Directory}:Message.{job.Name}",
+                payload = job.Payload is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(job.Payload),
+            }),
+        });
     }
 
     // 550 fault serialized in PascalCase (ExceptionCode/...) with System.Text.Json's DEFAULT

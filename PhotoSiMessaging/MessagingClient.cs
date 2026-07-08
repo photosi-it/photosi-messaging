@@ -28,8 +28,7 @@ internal sealed class MessagingClient(HttpClient httpClient) : IMessagingClient
 
         if (response.IsSuccessStatusCode)
         {
-            return await response.Content.ReadFromJsonAsync<TResponse>()
-                ?? throw new SomethingWentWrongException($"Empty RPC reply from {directory}:{name}");
+            return await response.Content.ReadFromJsonAsync<TResponse>() ?? throw new SomethingWentWrongException($"Empty RPC reply from {directory}:{name}");
         }
 
         // camelCase, same shape PostAsJsonAsync sent: the body attached to the exception stays replayable
