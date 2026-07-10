@@ -28,4 +28,19 @@ public class GuardExtensionsTest
     {
         Assert.ThrowsException<ObjectNotFoundException>(() => new List<int>().ShouldNotBeEmpty());
     }
+
+    [TestMethod]
+    public void ShouldBeNull_NotNull_ThrowsOperationNotAllowed()
+    {
+        var exception = Assert.ThrowsException<OperationNotAllowedException>(() => "exists".ShouldBeNull());
+
+        Assert.AreEqual(Code.OperationNotAllowed, exception.Code);
+    }
+
+    [TestMethod]
+    public void ShouldBeNull_Null_DoesNotThrow()
+    {
+        string? value = null;
+        value.ShouldBeNull();
+    }
 }
