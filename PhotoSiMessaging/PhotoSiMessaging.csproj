@@ -9,7 +9,7 @@
     <NoWarn>$(NoWarn);1591</NoWarn>
 
     <PackageId>PhotoSiMessaging</PackageId>
-    <Version>0.4.0</Version>
+    <Version>0.5.0</Version>
     <Authors>PhotoSi</Authors>
     <Description>Helper ASP.NET per il sidecarmq PhotoSi: MapMessaging (subscriber pub/sub + RPC in ingresso) e MessagingClient (pubblicazione/RPC in uscita via bridge del sidecar).</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="FluentValidation" Version="11.11.0" />
     <PackageReference Include="Microsoft.Extensions.Http.Polly" Version="10.0.9" />
   </ItemGroup>
 

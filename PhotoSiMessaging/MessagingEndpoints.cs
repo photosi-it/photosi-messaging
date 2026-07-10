@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using FluentValidation;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -34,6 +36,7 @@ public class MessagingRouteBuilder
     private readonly string _consumerTag;
     private readonly List<InitMessage> _messages = [];
     private readonly List<JobDefinition> _jobs = [];
+    private RouteHandlerBuilder? _lastRoute;
 
     internal MessagingRouteBuilder(RouteGroupBuilder group, string consumerTag)
     {
@@ -69,11 +72,39 @@ public class MessagingRouteBuilder
         return this;
     }
 
+    // Runs a FluentValidation validator (resolved from DI) on the inbound message BEFORE the handler.
+    // Chain it right after MapPubSub/MapRpc/MapJob — it applies to that last-mapped route. On failure it
+    // throws ValidationException (INVALID_MESSAGE): for rpc the MapMessaging filter turns it into a 550
+    // fault for the caller; for pubSub it bubbles (no ack -> redelivery). The service registers TValidator.
+    public MessagingRouteBuilder AddValidator<TMessage, TValidator>()
+        where TMessage : class
+        where TValidator : class, IValidator<TMessage>
+    {
+        if (_lastRoute is null)
+        {
+            throw new InvalidOperationException("AddValidator must be chained after MapPubSub/MapRpc/MapJob.");
+        }
+
+        _lastRoute.AddEndpointFilter(async (context, next) =>
+        {
+            var message = context.Arguments.OfType<TMessage>().FirstOrDefault();
+            if (message is not null)
+            {
+                var validator = context.HttpContext.RequestServices.GetRequiredService<TValidator>();
+                await MessagingEndpoints.ValidateOrThrowAsync(validator, message);
+            }
+
+            return await next(context);
+        });
+
+        return this;
+    }
+
     private MessagingRouteBuilder Map(string type, string directory, string name, Delegate handler, int? prefetchCount)
     {
         // route and /_init entry come from the same call: they cannot diverge
         var message = BuildInitMessage(_consumerTag, type, directory, name, prefetchCount);
-        _group.MapPost(message.Url, handler);
+        _lastRoute = _group.MapPost(message.Url, handler);
         _messages.Add(message);
         return this;
     }
@@ -176,6 +207,31 @@ public static class MessagingEndpoints
                 payload = job.Payload is null ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(job.Payload),
             }),
         });
+    }
+
+    // Validate a message with its FluentValidation validator; on failure raise the INVALID_MESSAGE fault
+    // with each error under Data + a JSON Detail ("{ErrorCode} on {PropertyName}": "{message}"), so the
+    // caller receives a structured 550 (the same shape as the sls AbstractValidator extension).
+    internal static async Task ValidateOrThrowAsync<TMessage>(IValidator<TMessage> validator, TMessage message)
+    {
+        var result = await validator.ValidateAsync(message);
+        if (result.IsValid)
+        {
+            return;
+        }
+
+        // Exceptions.ValidationException (our 550 fault), NOT FluentValidation.ValidationException.
+        var exception = new Exceptions.ValidationException($"Invalid {typeof(TMessage).Name}");
+        var detail = new JsonObject();
+        foreach (var error in result.Errors)
+        {
+            var key = $"{error.ErrorCode} on {error.PropertyName}";
+            exception.Data[key] = error.ErrorMessage;
+            detail[key] = error.ErrorMessage; // indexer overwrites, so duplicate (code, property) pairs are safe
+        }
+
+        exception.Detail = detail.ToString();
+        throw exception;
     }
 
     // 550 fault serialized in PascalCase (ExceptionCode/...) with System.Text.Json's DEFAULT
