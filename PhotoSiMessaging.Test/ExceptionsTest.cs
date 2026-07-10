@@ -36,4 +36,10 @@ public class ExceptionsTest
         Assert.AreEqual(Level.Warning, new ObjectNotFoundException("x").Level);
         Assert.AreEqual(Level.Error, new SecurityException("x").Level);
     }
+
+    [TestMethod]
+    public void ValidationException_DefaultsToWarningLevel()
+    {
+        Assert.AreEqual(Level.Warning, new ValidationException("x").Level);
+    }
 }

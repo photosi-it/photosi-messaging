@@ -19,7 +19,9 @@ public sealed class SecurityException(string message, Exception? innerException 
 }
 
 public sealed class ValidationException(string message, Exception? innerException = null)
-    : BaseException(message, Level.Error, innerException)
+    // Warning, not Error: an INVALID_MESSAGE is a caller fault (bad input), not a service failure — it
+    // shouldn't page as an error. Overridable per-instance via the settable Level property if ever needed.
+    : BaseException(message, Level.Warning, innerException)
 {
     public override string Code => Exceptions.Code.InvalidMessage;
 }
