@@ -76,9 +76,8 @@ public class MessagingRouteBuilder
     // Chain it right after MapPubSub/MapRpc/MapJob — it applies to that last-mapped route. On failure it
     // throws ValidationException (INVALID_MESSAGE): for rpc the MapMessaging filter turns it into a 550
     // fault for the caller; for pubSub it bubbles (no ack -> redelivery). The service registers TValidator.
-    public MessagingRouteBuilder AddValidator<TMessage, TValidator>()
-        where TMessage : class
-        where TValidator : class, IValidator<TMessage>
+    public MessagingRouteBuilder AddValidator<TValidator>()
+        where TValidator : class, IValidator
     {
         if (_lastRoute is null)
         {
@@ -87,10 +86,11 @@ public class MessagingRouteBuilder
 
         _lastRoute.AddEndpointFilter(async (context, next) =>
         {
-            var message = context.Arguments.OfType<TMessage>().FirstOrDefault();
+            var validator = context.HttpContext.RequestServices.GetRequiredService<TValidator>();
+            // the message type is inferred from the validator: pick the handler argument it can validate
+            var message = context.Arguments.FirstOrDefault(argument => argument is not null && validator.CanValidateInstancesOfType(argument.GetType()));
             if (message is not null)
             {
-                var validator = context.HttpContext.RequestServices.GetRequiredService<TValidator>();
                 await MessagingEndpoints.ValidateOrThrowAsync(validator, message);
             }
 
@@ -212,16 +212,16 @@ public static class MessagingEndpoints
     // Validate a message with its FluentValidation validator; on failure raise the INVALID_MESSAGE fault
     // with each error under Data + a JSON Detail ("{ErrorCode} on {PropertyName}": "{message}"), so the
     // caller receives a structured 550 (the same shape as the sls AbstractValidator extension).
-    internal static async Task ValidateOrThrowAsync<TMessage>(IValidator<TMessage> validator, TMessage message)
+    internal static async Task ValidateOrThrowAsync(IValidator validator, object message)
     {
-        var result = await validator.ValidateAsync(message);
+        var result = await validator.ValidateAsync(new ValidationContext<object>(message));
         if (result.IsValid)
         {
             return;
         }
 
         // Exceptions.ValidationException (our 550 fault), NOT FluentValidation.ValidationException.
-        var exception = new Exceptions.ValidationException($"Invalid {typeof(TMessage).Name}");
+        var exception = new Exceptions.ValidationException($"Invalid {message.GetType().Name}");
         var detail = new JsonObject();
         foreach (var error in result.Errors)
         {
