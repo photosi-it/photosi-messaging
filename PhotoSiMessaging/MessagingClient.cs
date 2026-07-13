@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using PhotoSiMessaging.Exceptions;
 using Polly;
@@ -137,6 +138,12 @@ public static class MessagingClientExtensions
 
         // pub/sub is not idempotent: retrying would publish a duplicate -> no-op
         var pubSubNoOp = Policy.NoOpAsync<HttpResponseMessage>();
+
+        // Server side (a service that maps handlers also calls this): make a malformed RPC request body throw a
+        // BadHttpRequestException instead of Minimal API's silent 400, so MapMessaging can turn it into a 550
+        // ValidationException fault carrying the deserializer's message — the FaaS main-runtime behaviour the
+        // connexion callers expect (an opaque 400 tells them nothing about what was wrong).
+        services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
 
         return services
             .AddHttpClient<IMessagingClient, MessagingClient>(c => c.BaseAddress = new Uri(Configuration.SidecarUri))

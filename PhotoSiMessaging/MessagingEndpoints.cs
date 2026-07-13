@@ -139,6 +139,37 @@ public static class MessagingEndpoints
 
         app.Urls.Add($"http://0.0.0.0:{port}");
 
+        // A malformed body fails [FromBody] binding BEFORE the endpoint filters run, so the BaseException filter
+        // below can't catch it. With ThrowOnBadRequest=true (set in AddMessagingClient) it surfaces here as a
+        // BadHttpRequestException; turn it into an INVALID_MESSAGE ValidationException carrying the deserializer's
+        // message (the FaaS main-runtime behaviour) — logged clearly for EVERY messaging endpoint, rpc and pubSub,
+        // instead of Minimal API's opaque 400 that tells the caller nothing.
+        app.Use(async (HttpContext context, RequestDelegate next) =>
+        {
+            try
+            {
+                await next(context);
+            }
+            catch (BadHttpRequestException ex) when (
+                context.Request.Path.StartsWithSegments("/api/rpc") ||
+                context.Request.Path.StartsWithSegments("/api/pubSub"))
+            {
+                var fault = new Exceptions.ValidationException(ex.InnerException?.Message ?? ex.Message, ex);
+                context.RequestServices.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(typeof(MessagingEndpoints).FullName!)
+                    .Log(ToLogLevel(fault.Level), fault, "Messaging {Path} rejected: malformed request body", context.Request.Path.Value);
+
+                context.Response.Clear();
+                // 550 INVALID_MESSAGE for EVERY messaging endpoint (rpc + pubSub), matching the legacy
+                // PhotosiMessageClient middleware (which converted any 400 -> 550 transversally). Safe for pubSub:
+                // sidecarmq's DEFAULT_RETRY_STRATEGY redelivers ONLY 502-504, so a 550 is not looped — it goes to
+                // the BadPubSubMessage (dead-letter) queue and is acked, like the FaaS bad-message queue.
+                context.Response.StatusCode = 550;
+                context.Response.ContentType = "application/json";
+                await context.Response.WriteAsync(SerializeFault(fault));
+            }
+        });
+
         var group = app.MapGroup("").ExcludeFromDescription();
 
         group.AddEndpointFilter(async (context, next) =>
