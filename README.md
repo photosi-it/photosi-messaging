@@ -86,6 +86,11 @@ le eccezioni risalgono invece come 500: il sidecar non acka e il messaggio viene
 sovrascrivibili. Occhio: il consumerTag finisce nei nomi delle code Solace — cambiarlo significa
 code nuove.
 
+`MapPubSub` accetta anche `createDmq: true` (solo pub/sub): il sidecar provisiona una coda
+`<nomeCoda>.DMQ` — 20 MB di spool, TTL messaggi 24h — e la imposta come dead-message queue
+della coda della subscription. Per ora è solo provisioning: nessun messaggio ci viene
+instradato automaticamente.
+
 ## Deployment
 
 Richiede il container `sidecarmq` nello stesso pod. Esponi **solo la porta pubblica** sul
