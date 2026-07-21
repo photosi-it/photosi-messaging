@@ -79,8 +79,8 @@ public class MessagingRouteBuilder
 
     // Runs a FluentValidation validator (resolved from DI) on the inbound message BEFORE the handler.
     // Chain it right after MapPubSub/MapRpc/MapJob — it applies to that last-mapped route. On failure it
-    // throws ValidationException (INVALID_MESSAGE): for rpc the MapMessaging filter turns it into a 550
-    // fault for the caller; for pubSub it bubbles (no ack -> redelivery). The service registers TValidator.
+    // throws ValidationException (INVALID_MESSAGE): the MapMessaging filter turns it into a 550 fault,
+    // rpc and pubSub alike. The service registers TValidator.
     public MessagingRouteBuilder AddValidator<TValidator>()
         where TValidator : class, IValidator
     {
@@ -188,25 +188,27 @@ public static class MessagingEndpoints
             return await next(context);
         });
 
-        // Server half of the typed round-trip: an RPC handler that throws a BaseException must
-        // answer 550 + {ExceptionCode,...} (the contract read by MessagingClient.FromFault and by
-        // sls-messaging), not degrade into a 500 -> SOMETHING_WENT_WRONG.
-        // RPC only: in pub/sub there is no caller awaiting a reply, so we let it bubble
-        // (500 -> the sidecar won't ack -> redelivery).
+        // Server half of the typed round-trip: a handler that throws a BaseException answers
+        // 550 + {ExceptionCode,...} (the contract read by MessagingClient.FromFault and by
+        // sls-messaging), not degrade into a 500 -> SOMETHING_WENT_WRONG. Rpc AND pubSub alike,
+        // mirroring the FaaS main-runtime (ServerLifecycle: any exception carrying a PmsResponse
+        // -> 550, whatever the trigger). On pubSub the sidecar reads the 550 as a business
+        // outcome: bad-messaged + acked, excluded from function_failures_total and never parked
+        // in the createDmq DMQ.
         group.AddEndpointFilter(async (context, next) =>
         {
             try
             {
                 return await next(context);
             }
-            catch (BaseException ex) when (context.HttpContext.Request.Path.StartsWithSegments("/api/rpc"))
+            catch (BaseException ex)
             {
                 // catching it here means ASP.NET no longer logs it as unhandled: without this
                 // log the fault would reach the caller but the server would lose every trace of it
                 context.HttpContext.RequestServices
                     .GetRequiredService<ILoggerFactory>()
                     .CreateLogger(typeof(MessagingEndpoints).FullName!)
-                    .Log(ToLogLevel(ex.Level), ex, "RPC handler {Path} faulted with {Code}", context.HttpContext.Request.Path.Value, ex.Code);
+                    .Log(ToLogLevel(ex.Level), ex, "Messaging handler {Path} faulted with {Code}", context.HttpContext.Request.Path.Value, ex.Code);
 
                 return Results.Text(SerializeFault(ex), "application/json", statusCode: 550);
             }

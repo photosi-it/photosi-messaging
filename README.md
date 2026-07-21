@@ -76,11 +76,12 @@ app.MapMessaging(messaging =>
 ```
 
 Ogni handler è un normale delegate minimal-API. Per l'RPC **il body della risposta HTTP è la
-reply** (serializzato camelCase, il default ASP.NET). Un handler RPC che lancia una
-`BaseException` risponde automaticamente `550 + {ExceptionCode, ...}` (PascalCase, il casing
-che tutti i client dell'ecosistema decodificano) e viene loggato secondo il suo `Level`: il
-chiamante riceve l'eccezione **tipizzata**, non un generico `SOMETHING_WENT_WRONG`. Nel pub/sub
-le eccezioni risalgono invece come 500: il sidecar non acka e il messaggio viene riconsegnato.
+reply** (serializzato camelCase, il default ASP.NET). Un handler — rpc **o pub/sub** — che
+lancia una `BaseException` risponde automaticamente `550 + {ExceptionCode, ...}` (PascalCase,
+il casing che tutti i client dell'ecosistema decodificano) e viene loggato secondo il suo
+`Level`, come faceva la runtime FaaS. Sull'RPC il chiamante riceve l'eccezione **tipizzata**,
+non un generico `SOMETHING_WENT_WRONG`; sul pub/sub il 550 dice al sidecar che è un esito di
+business: non conteggiato tra le function failure e mai parcheggiato nella DMQ (`createDmq`).
 
 `consumerTag` e `port` hanno default sensati (`SERVICE_NAME` in CONSTANT_CASE, 8081) ma sono
 sovrascrivibili. Occhio: il consumerTag finisce nei nomi delle code Solace — cambiarlo significa

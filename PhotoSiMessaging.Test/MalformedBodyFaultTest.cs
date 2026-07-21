@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using PhotoSiMessaging.Exceptions;
 
 namespace PhotoSiMessaging.Test;
 
@@ -36,6 +37,8 @@ public class MalformedBodyFaultTest
         {
             m.MapRpc("TestDir", "Echo", (EchoRequest r) => new { r.Value });
             m.MapPubSub("TestDir", "Notify", (EchoRequest _) => { });
+            m.MapRpc("TestDir", "EchoBoom", (EchoRequest _) => { throw new ObjectNotFoundException("echo 42 not found"); });
+            m.MapPubSub("TestDir", "NotifyBoom", (EchoRequest _) => { throw new ObjectNotFoundException("notify 42 not found"); });
         }, consumerTag: "TEST", port: port); // app.Urls := [:port] => Kestrel binds only this port
         await app.StartAsync();
         return app;
@@ -77,6 +80,49 @@ public class MalformedBodyFaultTest
 
             Assert.AreEqual(550, (int)resp.StatusCode);
             StringAssert.Contains(await resp.Content.ReadAsStringAsync(), "\"ExceptionCode\":\"INVALID_MESSAGE\"");
+        }
+        finally
+        {
+            await app.StopAsync();
+            await app.DisposeAsync();
+        }
+    }
+
+    // A handler throwing a BaseException must answer the typed 550 fault on BOTH kinds of route —
+    // pubSub included, mirroring the FaaS main-runtime (PmsResponse -> 550 whatever the trigger) —
+    // never degrade into a generic 500.
+    [TestMethod]
+    public async Task RpcHandlerBaseException_Returns550TypedFault()
+    {
+        var port = FreePort();
+        var app = await StartAppAsync(port);
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
+            var resp = await client.PostAsync("/api/rpc/TestDir/EchoBoom", Json("""{"value":5}"""));
+
+            Assert.AreEqual(550, (int)resp.StatusCode);
+            StringAssert.Contains(await resp.Content.ReadAsStringAsync(), "\"ExceptionCode\":\"OBJECT_NOT_FOUND\"");
+        }
+        finally
+        {
+            await app.StopAsync();
+            await app.DisposeAsync();
+        }
+    }
+
+    [TestMethod]
+    public async Task PubSubHandlerBaseException_AlsoReturns550TypedFault()
+    {
+        var port = FreePort();
+        var app = await StartAppAsync(port);
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
+            var resp = await client.PostAsync("/api/pubSub/TestDir/NotifyBoom", Json("""{"value":5}"""));
+
+            Assert.AreEqual(550, (int)resp.StatusCode);
+            StringAssert.Contains(await resp.Content.ReadAsStringAsync(), "\"ExceptionCode\":\"OBJECT_NOT_FOUND\"");
         }
         finally
         {
