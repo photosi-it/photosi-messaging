@@ -51,7 +51,16 @@ public class MessagingEndpointsTest
 
         Assert.AreEqual("/api/pubSub/CartServiceDirectory/TestPubSub", m.Url);
         Assert.AreEqual("CART_SERVICE/CartServiceDirectory/TestPubSub", m.ConsumerIdentifier);
-        Assert.IsTrue(m is { Type: "pubSub", PrefetchCount: 10, Directory: "CartServiceDirectory", Name: "TestPubSub" });
+        // CreateDmq null (not false) without the flag: existing /_init payloads must stay byte-identical
+        Assert.IsTrue(m is { Type: "pubSub", PrefetchCount: 10, Directory: "CartServiceDirectory", Name: "TestPubSub", CreateDmq: null });
+    }
+
+    [TestMethod]
+    public void BuildInitMessage_PubSubWithDmq_EmitsCreateDmq()
+    {
+        var m = MessagingRouteBuilder.BuildInitMessage("CART_SERVICE", "pubSub", "CartServiceDirectory", "TestPubSub", 10, createDmq: true);
+
+        Assert.IsTrue(m is { Type: "pubSub", CreateDmq: true });
     }
 
     [TestMethod]
@@ -60,7 +69,7 @@ public class MessagingEndpointsTest
         var m = MessagingRouteBuilder.BuildInitMessage("CART_SERVICE", "rpc", "CartServiceDirectory", "TestRpc", null);
 
         Assert.AreEqual("/api/rpc/CartServiceDirectory/TestRpc", m.Url);
-        Assert.IsTrue(m is { Type: "rpc", Directory: "CartServiceDirectory", Name: "TestRpc", PrefetchCount: null });
+        Assert.IsTrue(m is { Type: "rpc", Directory: "CartServiceDirectory", Name: "TestRpc", PrefetchCount: null, CreateDmq: null });
     }
 
     [DataTestMethod]

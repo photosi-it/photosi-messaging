@@ -14,8 +14,11 @@ namespace PhotoSiMessaging;
 // GET /_init, provisions the Solace queues/subscriptions from that contract, and delivers
 // messages by POSTing to the handler urls.
 
-// PrefetchCount applies only to pubSub queues (the sidecar ignores it for rpc): null = omitted from the JSON
-internal record InitMessage(string ConsumerIdentifier, string Directory, string Name, int? PrefetchCount, string Type, string Url);
+// PrefetchCount applies only to pubSub queues (the sidecar ignores it for rpc): null = omitted from the JSON.
+// CreateDmq (pubSub only): true = the sidecar provisions a "<queueName>.DMQ" queue and points the
+// subscription queue's deadMsgQueue at it; null (rpc, or pubSub without the flag) so existing /_init
+// payloads stay byte-identical.
+internal record InitMessage(string ConsumerIdentifier, string Directory, string Name, int? PrefetchCount, string Type, string Url, bool? CreateDmq = null);
 
 internal record InitResponse(List<InitMessage> Messages);
 
@@ -48,9 +51,11 @@ public class MessagingRouteBuilder
 
     internal IReadOnlyList<JobDefinition> Jobs => _jobs;
 
-    public MessagingRouteBuilder MapPubSub(string directory, string name, Delegate handler, int prefetchCount = 10)
+    // createDmq: the sidecar also provisions a dead-message queue named "<queueName>.DMQ" and configures
+    // it as the subscription queue's deadMsgQueue on the broker (pubSub only: rpc is never dead-lettered).
+    public MessagingRouteBuilder MapPubSub(string directory, string name, Delegate handler, int prefetchCount = 10, bool createDmq = false)
     {
-        return Map("pubSub", directory, name, handler, prefetchCount);
+        return Map("pubSub", directory, name, handler, prefetchCount, createDmq);
     }
 
     // the HTTP response body is the RPC reply
@@ -100,16 +105,16 @@ public class MessagingRouteBuilder
         return this;
     }
 
-    private MessagingRouteBuilder Map(string type, string directory, string name, Delegate handler, int? prefetchCount)
+    private MessagingRouteBuilder Map(string type, string directory, string name, Delegate handler, int? prefetchCount, bool createDmq = false)
     {
         // route and /_init entry come from the same call: they cannot diverge
-        var message = BuildInitMessage(_consumerTag, type, directory, name, prefetchCount);
+        var message = BuildInitMessage(_consumerTag, type, directory, name, prefetchCount, createDmq);
         _lastRoute = _group.MapPost(message.Url, handler);
         _messages.Add(message);
         return this;
     }
 
-    internal static InitMessage BuildInitMessage(string consumerTag, string type, string directory, string name, int? prefetchCount)
+    internal static InitMessage BuildInitMessage(string consumerTag, string type, string directory, string name, int? prefetchCount, bool createDmq = false)
     {
         return new InitMessage(
             ConsumerIdentifier: $"{consumerTag}/{directory}/{name}",
@@ -117,7 +122,8 @@ public class MessagingRouteBuilder
             Name: name,
             PrefetchCount: prefetchCount,
             Type: type, // strings the sidecar switches on: "pubSub" / "rpc"
-            Url: $"/api/{type}/{directory}/{name}");
+            Url: $"/api/{type}/{directory}/{name}",
+            CreateDmq: createDmq ? true : null);
     }
 }
 

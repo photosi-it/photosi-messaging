@@ -86,6 +86,13 @@ le eccezioni risalgono invece come 500: il sidecar non acka e il messaggio viene
 sovrascrivibili. Occhio: il consumerTag finisce nei nomi delle code Solace — cambiarlo significa
 code nuove.
 
+`MapPubSub` accetta anche `createDmq: true` (solo pub/sub): il sidecar provisiona una coda
+`<nomeCoda>.DMQ` — 20 MB di spool, TTL messaggi 24h — e ci parcheggia una copia persistente
+di ogni messaggio fallito definitivamente (dopo i retry), pubblicandola sul topic
+`DMQ/<nomeCoda>`. Un consumer centrale (es. un logger verso Datadog) può sottoscrivere
+`DMQ/>` per osservare i fallimenti di tutta la flotta; il flusso globale `BadPubSubMessage`
+resta invariato.
+
 ## Deployment
 
 Richiede il container `sidecarmq` nello stesso pod. Esponi **solo la porta pubblica** sul

@@ -9,7 +9,7 @@
     <NoWarn>$(NoWarn);1591</NoWarn>
 
     <PackageId>PhotoSiMessaging</PackageId>
-    <Version>0.9.0</Version>
+    <Version>0.10.0</Version>
     <Authors>PhotoSi</Authors>
     <Description>Helper ASP.NET per il sidecarmq PhotoSi: MapMessaging (subscriber pub/sub + RPC in ingresso) e MessagingClient (pubblicazione/RPC in uscita via bridge del sidecar).</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
