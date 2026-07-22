@@ -82,6 +82,10 @@ il casing che tutti i client dell'ecosistema decodificano) e viene loggato secon
 `Level`, come faceva la runtime FaaS. Sull'RPC il chiamante riceve l'eccezione **tipizzata**,
 non un generico `SOMETHING_WENT_WRONG`; sul pub/sub il 550 dice al sidecar che è un esito di
 business: non conteggiato tra le function failure e mai parcheggiato nella DMQ (`createDmq`).
+Un'eccezione **non**-PMS risponde invece `500` con `<Tipo>: <messaggio>` nel body (sempre come
+la runtime FaaS): il sidecar lo copia nell'`errorDescription` della busta bad-message/DMQ — un
+500 ASP.NET nudo avrebbe il body vuoto e i messaggi parcheggiati sarebbero indiagnosticabili.
+Sentry riceve comunque l'eccezione completa (loggata a Error).
 
 `consumerTag` e `port` hanno default sensati (`SERVICE_NAME` in CONSTANT_CASE, 8081) ma sono
 sovrascrivibili. Occhio: il consumerTag finisce nei nomi delle code Solace — cambiarlo significa

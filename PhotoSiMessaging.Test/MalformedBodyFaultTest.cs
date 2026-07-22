@@ -39,6 +39,7 @@ public class MalformedBodyFaultTest
             m.MapPubSub("TestDir", "Notify", (EchoRequest _) => { });
             m.MapRpc("TestDir", "EchoBoom", (EchoRequest _) => { throw new ObjectNotFoundException("echo 42 not found"); });
             m.MapPubSub("TestDir", "NotifyBoom", (EchoRequest _) => { throw new ObjectNotFoundException("notify 42 not found"); });
+            m.MapPubSub("TestDir", "NotifyCrash", (EchoRequest _) => { throw new InvalidOperationException("Sequence contains more than one element"); });
         }, consumerTag: "TEST", port: port); // app.Urls := [:port] => Kestrel binds only this port
         await app.StartAsync();
         return app;
@@ -123,6 +124,29 @@ public class MalformedBodyFaultTest
 
             Assert.AreEqual(550, (int)resp.StatusCode);
             StringAssert.Contains(await resp.Content.ReadAsStringAsync(), "\"ExceptionCode\":\"OBJECT_NOT_FOUND\"");
+        }
+        finally
+        {
+            await app.StopAsync();
+            await app.DisposeAsync();
+        }
+    }
+
+    // A NON-PMS unhandled exception answers 500 with "<Type>: <message>" as the body (the FaaS
+    // main-runtime contract): in production a bare ASP.NET 500 has an empty body, and the sidecar
+    // copies the wire into the bad-message/DMQ envelope's errorDescription.
+    [TestMethod]
+    public async Task PubSubHandlerUnhandledException_Returns500WithTypeAndMessage()
+    {
+        var port = FreePort();
+        var app = await StartAppAsync(port);
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
+            var resp = await client.PostAsync("/api/pubSub/TestDir/NotifyCrash", Json("""{"value":5}"""));
+
+            Assert.AreEqual(500, (int)resp.StatusCode);
+            StringAssert.Contains(await resp.Content.ReadAsStringAsync(), "InvalidOperationException: Sequence contains more than one element");
         }
         finally
         {

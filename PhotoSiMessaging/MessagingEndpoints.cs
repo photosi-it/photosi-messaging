@@ -212,6 +212,21 @@ public static class MessagingEndpoints
 
                 return Results.Text(SerializeFault(ex), "application/json", statusCode: 550);
             }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Unhandled (non-PMS) exception: mirror the FaaS main-runtime, which answered
+                // 500 + the exception message as the body. In production a bare ASP.NET 500 has an
+                // EMPTY body, and the sidecar copies the wire into the bad-message/DMQ envelope's
+                // errorDescription — without this, parked messages read "HTTP 500: " and are
+                // undiagnosable. Logged at Error, so Sentry still gets the full exception; these
+                // endpoints answer only the sidecar on localhost, no detail leaks outside the pod.
+                context.HttpContext.RequestServices
+                    .GetRequiredService<ILoggerFactory>()
+                    .CreateLogger(typeof(MessagingEndpoints).FullName!)
+                    .LogError(ex, "Messaging handler {Path} crashed with {ExceptionType}", context.HttpContext.Request.Path.Value, ex.GetType().Name);
+
+                return Results.Text($"{ex.GetType().Name}: {ex.Message}", "text/plain", statusCode: 500);
+            }
         });
 
         var builder = new MessagingRouteBuilder(group, consumerTag);
