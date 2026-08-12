@@ -65,9 +65,19 @@ public sealed record DmqOptions(int MaxRetries = 3, TimeSpan? RetryEvery = null)
             throw new ArgumentException($"{context}: RetryEvery must be whole minutes (>= 1 minute).");
         }
 
-        if (every >= TimeSpan.FromHours(1) && (every.Minutes != 0 || every > Ttl))
+        // solo DIVISORI esatti di ora/giorno: la cron a step "*/N" e' esatta solo per quelli.
+        // "*/59" scatterebbe a :00 E :59 (due drain back-to-back a ogni cambio d'ora), "0 */23"
+        // a 00:00 e 23:00 — cadenze reali diverse da quelle nominali su cui ragiona il budget.
+        if (every >= TimeSpan.FromHours(1))
         {
-            throw new ArgumentException($"{context}: RetryEvery of an hour or more must be whole hours, up to 24.");
+            if (every.Minutes != 0 || every > Ttl || 24 % (int)every.TotalHours != 0)
+            {
+                throw new ArgumentException($"{context}: RetryEvery of an hour or more must divide the day exactly (1, 2, 3, 4, 6, 8, 12 or 24 hours).");
+            }
+        }
+        else if (60 % (int)every.TotalMinutes != 0)
+        {
+            throw new ArgumentException($"{context}: RetryEvery under an hour must divide it exactly (1, 2, 3, 4, 5, 6, 10, 12, 15, 20 or 30 minutes).");
         }
 
         if (MaxRetries * every > Ttl)
@@ -121,6 +131,10 @@ public class MessagingRouteBuilder
 
     internal IReadOnlyList<JobDefinition> Jobs => _jobs;
 
+    // true se almeno una MapPubSub ha registrato il job interno di drain: MapMessaging lo usa per
+    // il fail-fast su AddMessagingClient mancante
+    internal bool HasDmqDrainJobs { get; private set; }
+
     // dmq: the sidecar provisions "<queueName>.DMQ" as the subscription queue's deadMsgQueue and,
     // with MaxRetries > 0, an internal job re-queues parked messages on the DmqOptions schedule
     // (pubSub only: rpc is never dead-lettered). Replaces the old bool createDmq: callers migrate
@@ -140,6 +154,7 @@ public class MessagingRouteBuilder
             MapJob(directory, $"{name}DmqDrain", DmqOptions.ToCron(retryEvery!.Value),
                 BuildDmqDrainHandler(directory, name, dmq.MaxRetries));
             _lastRoute = subscriberRoute;
+            HasDmqDrainJobs = true;
         }
 
         return this;
@@ -151,19 +166,49 @@ public class MessagingRouteBuilder
     // ritentato — il prossimo tentativo e' il tick successivo.
     internal static Delegate BuildDmqDrainHandler(string directory, string name, int maxRetries)
     {
-        return async (IHttpClientFactory clientFactory, ILoggerFactory loggerFactory) =>
+        // HttpContext, NON parameter injection: un parametro IHttpClientFactory su un servizio
+        // senza AddMessagingClient verrebbe inferito da Minimal API come BODY parameter — e il
+        // tick fallirebbe 400 a body vuoto per sempre, senza un solo log utile. Da qui invece
+        // esce un errore esplicito (e MapMessaging fa comunque fail-fast all'avvio).
+        return async (HttpContext context) =>
         {
+            var clientFactory = context.RequestServices.GetRequiredService<IHttpClientFactory>();
             var client = clientFactory.CreateClient(MessagingEndpoints.DmqDrainClientName);
-            using var response = await client.PostAsync(
-                $"/dmq/drain?directory={Uri.EscapeDataString(directory)}&name={Uri.EscapeDataString(name)}&maxRetries={maxRetries}",
-                content: null);
-            var summary = await response.Content.ReadAsStringAsync();
-            if (!response.IsSuccessStatusCode)
+            HttpResponseMessage response;
+            try
             {
-                throw new InvalidOperationException($"DMQ drain {directory}/{name} failed: HTTP {(int)response.StatusCode} {summary}");
+                response = await client.PostAsync(
+                    $"/dmq/drain?directory={Uri.EscapeDataString(directory)}&name={Uri.EscapeDataString(name)}&maxRetries={maxRetries}",
+                    content: null, context.RequestAborted);
+            }
+            catch (OperationCanceledException ex) when (!context.RequestAborted.IsCancellationRequested)
+            {
+                // Timeout dei 15 minuti del client dedicato. TaskCanceledException E' una
+                // OperationCanceledException: senza questo rethrow scavalcherebbe il filtro dei
+                // 500 di MapMessaging (che la esclude, pensando all'abort del chiamante) e il
+                // tick finirebbe 500 a body VUOTO — proprio il caso indiagnosticabile che quel
+                // filtro esiste per prevenire. Il drain lato sidecar intanto continua.
+                throw new InvalidOperationException($"DMQ drain {directory}/{name} did not complete within the client timeout; the sidecar drain keeps running — check the next tick's summary.", ex);
             }
 
-            loggerFactory.CreateLogger(typeof(MessagingEndpoints).FullName!)
+            string summary;
+            using (response)
+            {
+                summary = await response.Content.ReadAsStringAsync(context.RequestAborted);
+                if ((int)response.StatusCode == 404)
+                {
+                    // il caso rollout: manifest con una sidecar vecchia — il router risponde 404
+                    throw new InvalidOperationException($"DMQ drain {directory}/{name}: the pod's sidecar answered 404 — /dmq/drain requires sidecarmq >= 0.1.5 (old sidecar image in the manifest?)");
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new InvalidOperationException($"DMQ drain {directory}/{name} failed: HTTP {(int)response.StatusCode} {summary}");
+                }
+            }
+
+            context.RequestServices.GetRequiredService<ILoggerFactory>()
+                .CreateLogger(typeof(MessagingEndpoints).FullName!)
                 .LogInformation("DMQ drain {Directory}/{Name}: {Summary}", directory, name, summary);
             return Results.Ok();
         };
@@ -182,6 +227,16 @@ public class MessagingRouteBuilder
     public MessagingRouteBuilder MapJob(string directory, string name, string cron, Delegate handler,
         JobConcurrency concurrency = JobConcurrency.Forbid, object? payload = null)
     {
+        // Il nome finisce nel CronJob k8s come "job-<kebab>", e k8s rifiuta i nomi CronJob oltre
+        // i 52 caratteri (il controller appende ~11 char al Job generato). La pipeline NON lo
+        // valida: il manifest invalido bloccherebbe in ArgoCD l'INTERA application del servizio,
+        // a pipeline verde. Meglio non partire proprio, col nome esatto nel messaggio.
+        var cronJobName = $"job-{MessagingEndpoints.ToKebabCase(name)}";
+        if (cronJobName.Length > 52)
+        {
+            throw new ArgumentException($"MapJob {directory}/{name}: the k8s CronJob name \"{cronJobName}\" is {cronJobName.Length} characters, over the 52-character limit — shorten the job name.");
+        }
+
         MapPubSub(directory, name, handler);
         _jobs.Add(new JobDefinition(directory, name, cron, concurrency,
             payload is null ? null : JsonSerializer.Serialize(payload, JsonSerializerOptions.Web)));
@@ -347,6 +402,14 @@ public static class MessagingEndpoints
         var builder = new MessagingRouteBuilder(group, consumerTag);
         subscribers(builder);
 
+        // fail-fast: il job di drain risolve IHttpClientFactory a runtime, e la factory esiste solo
+        // se il servizio ha chiamato AddMessagingClient. Senza questo check un solo-consumer
+        // partirebbe pulito e ogni tick del drain fallirebbe, per sempre.
+        if (builder.HasDmqDrainJobs && app.Services.GetService<IHttpClientFactory>() is null)
+        {
+            throw new InvalidOperationException("MapPubSub with DmqOptions(MaxRetries > 0) requires services.AddMessagingClient(): the internal DMQ drain job needs its HttpClient.");
+        }
+
         // CLI contract for the deploy pipeline: `dotnet <Service>.dll --dump-jobs` prints the
         // declared jobs as JSON and exits, so the pipeline can materialize/reconcile the k8s
         // CronJobs that publish each job's trigger message.
@@ -423,6 +486,25 @@ public static class MessagingEndpoints
         Level.Fatal => LogLevel.Critical,
         _ => LogLevel.Error,
     };
+
+    // Specchio ESATTO della kebab-izzazione della pipeline (`sed 's/\([A-Z]\)/-\1/g;s/^-//' | tr A-Z a-z`):
+    // un trattino prima di OGNI maiuscola (consecutive comprese), poi tutto minuscolo.
+    // "OrderUpdatedDmqDrain" -> "order-updated-dmq-drain"
+    internal static string ToKebabCase(string source)
+    {
+        var result = new System.Text.StringBuilder(source.Length + source.Length / 2);
+        foreach (var c in source)
+        {
+            if (char.IsUpper(c) && result.Length > 0)
+            {
+                result.Append('-');
+            }
+
+            result.Append(char.ToLowerInvariant(c));
+        }
+
+        return result.ToString();
+    }
 
     // "cart-service" / "CartService" / "cart service" -> "CART_SERVICE"
     internal static string ToConstantCase(string source)
