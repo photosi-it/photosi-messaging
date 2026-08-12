@@ -145,6 +145,14 @@ public static class MessagingClientExtensions
         // connexion callers expect (an opaque 400 tells them nothing about what was wrong).
         services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
 
+        // il client del drain DMQ (job interno di MapPubSub con DmqOptions): il drain e' un batch
+        // sincrono che puo' durare minuti su una DMQ piena — timeout dedicato
+        services.AddHttpClient(MessagingEndpoints.DmqDrainClientName, c =>
+        {
+            c.BaseAddress = new Uri(Configuration.SidecarUri);
+            c.Timeout = TimeSpan.FromMinutes(15);
+        });
+
         return services
             .AddHttpClient<IMessagingClient, MessagingClient>(c => c.BaseAddress = new Uri(Configuration.SidecarUri))
             .AddPolicyHandler(request =>
