@@ -22,86 +22,6 @@ internal record InitMessage(string ConsumerIdentifier, string Directory, string 
 
 internal record InitResponse(List<InitMessage> Messages);
 
-// Dead-lettering + retry automatico per una subscription pubSub (sidecarmq >= 0.1.5).
-// La sidecar crea "<coda>.DMQ" e ci parcheggia i fallimenti definitivi non-550 (TTL 24h); con
-// MaxRetries > 0 la libreria registra anche un job interno che ogni RetryEvery rimette i
-// parcheggiati nella coda madre (move affidabile lato sidecar, POST /dmq/drain). Un messaggio
-// che esaurisce i tentativi resta parcheggiato fino alla scadenza del TTL, ripescabile a mano
-// (drain con includeExhausted=1, o "Move Messages" dal Manager).
-//
-// MaxRetries = 0: solo parcheggio, nessun job (e RetryEvery non e' ammesso).
-// RetryEvery: minuti interi sotto l'ora, oppure ore intere — deve tradursi in una cron esatta.
-//   Default: 2 ore.
-// Vincolo: MaxRetries * RetryEvery <= 24h — oltre la finestra del TTL i retry sarebbero
-// promesse vuote (il messaggio scade prima di esaurirli).
-public sealed record DmqOptions(int MaxRetries = 3, TimeSpan? RetryEvery = null)
-{
-    internal static readonly TimeSpan DefaultRetryEvery = TimeSpan.FromHours(2);
-    internal static readonly TimeSpan Ttl = TimeSpan.FromHours(24);
-
-    // fail fast all'avvio, con la subscription nel messaggio: una dichiarazione invalida non deve
-    // arrivare viva al broker
-    internal TimeSpan Validate(string directory, string name)
-    {
-        var context = $"DmqOptions on {directory}/{name}";
-        if (MaxRetries < 0)
-        {
-            throw new ArgumentException($"{context}: MaxRetries must be >= 0.");
-        }
-
-        if (MaxRetries == 0)
-        {
-            if (RetryEvery is not null)
-            {
-                throw new ArgumentException($"{context}: RetryEvery has no effect with MaxRetries = 0 (park-only).");
-            }
-
-            return DefaultRetryEvery; // inutilizzato: nessun job viene registrato
-        }
-
-        var every = RetryEvery ?? DefaultRetryEvery;
-        if (every < TimeSpan.FromMinutes(1) || every.Seconds != 0 || every.Milliseconds != 0 || every.Microseconds != 0)
-        {
-            throw new ArgumentException($"{context}: RetryEvery must be whole minutes (>= 1 minute).");
-        }
-
-        // solo DIVISORI esatti di ora/giorno: la cron a step "*/N" e' esatta solo per quelli.
-        // "*/59" scatterebbe a :00 E :59 (due drain back-to-back a ogni cambio d'ora), "0 */23"
-        // a 00:00 e 23:00 — cadenze reali diverse da quelle nominali su cui ragiona il budget.
-        if (every >= TimeSpan.FromHours(1))
-        {
-            if (every.Minutes != 0 || every > Ttl || 24 % (int)every.TotalHours != 0)
-            {
-                throw new ArgumentException($"{context}: RetryEvery of an hour or more must divide the day exactly (1, 2, 3, 4, 6, 8, 12 or 24 hours).");
-            }
-        }
-        else if (60 % (int)every.TotalMinutes != 0)
-        {
-            throw new ArgumentException($"{context}: RetryEvery under an hour must divide it exactly (1, 2, 3, 4, 5, 6, 10, 12, 15, 20 or 30 minutes).");
-        }
-
-        if (MaxRetries * every > Ttl)
-        {
-            throw new ArgumentException($"{context}: MaxRetries * RetryEvery must fit the 24h DMQ TTL ({MaxRetries} * {every} = {MaxRetries * every}).");
-        }
-
-        return every;
-    }
-
-    // Validate() garantisce che ci si arrivi solo con valori rappresentabili esattamente
-    internal static string ToCron(TimeSpan every)
-    {
-        if (every == Ttl)
-        {
-            return "0 0 * * *";
-        }
-
-        return every >= TimeSpan.FromHours(1)
-            ? $"0 */{(int)every.TotalHours} * * *"
-            : $"*/{(int)every.TotalMinutes} * * * *";
-    }
-}
-
 // Maps 1:1 onto the k8s CronJob concurrencyPolicy.
 public enum JobConcurrency
 {
@@ -131,87 +51,11 @@ public class MessagingRouteBuilder
 
     internal IReadOnlyList<JobDefinition> Jobs => _jobs;
 
-    // true se almeno una MapPubSub ha registrato il job interno di drain: MapMessaging lo usa per
-    // il fail-fast su AddMessagingClient mancante
-    internal bool HasDmqDrainJobs { get; private set; }
-
-    // dmq: the sidecar provisions "<queueName>.DMQ" as the subscription queue's deadMsgQueue and,
-    // with MaxRetries > 0, an internal job re-queues parked messages on the DmqOptions schedule
-    // (pubSub only: rpc is never dead-lettered). Replaces the old bool createDmq: callers migrate
-    // to `dmq: new DmqOptions()`.
-    public MessagingRouteBuilder MapPubSub(string directory, string name, Delegate handler, int prefetchCount = 10, DmqOptions? dmq = null)
+    // createDmq: the sidecar also provisions a dead-message queue named "<queueName>.DMQ" and configures
+    // it as the subscription queue's deadMsgQueue on the broker (pubSub only: rpc is never dead-lettered).
+    public MessagingRouteBuilder MapPubSub(string directory, string name, Delegate handler, int prefetchCount = 10, bool createDmq = false)
     {
-        var retryEvery = dmq?.Validate(directory, name); // fail fast, PRIMA di registrare qualunque route
-        Map("pubSub", directory, name, handler, prefetchCount, createDmq: dmq is not null);
-
-        if (dmq is not null && dmq.MaxRetries > 0)
-        {
-            // Il job di drain e' una subscription interna in piu': il CronJob (materializzato dalla
-            // pipeline via --dump-jobs) pubblica il tick, la coda broker lo consegna a UNA replica,
-            // e l'handler chiede alla sidecar il move dei parcheggiati. AddValidator si aggancia a
-            // _lastRoute: va ripristinato alla route dell'UTENTE, o il validator finirebbe sul tick.
-            var subscriberRoute = _lastRoute;
-            MapJob(directory, $"{name}DmqDrain", DmqOptions.ToCron(retryEvery!.Value),
-                BuildDmqDrainHandler(directory, name, dmq.MaxRetries));
-            _lastRoute = subscriberRoute;
-            HasDmqDrainJobs = true;
-        }
-
-        return this;
-    }
-
-    // Chiama la sidecar del pod: e' lei che risolve i nomi delle code dal proprio registro e fa il
-    // move pop-and-push. Un tick fallito lancia: passa dal giro standard dei fallimenti pubSub
-    // (function_failures_total + record su BadPubSubMessage, visibile su Datadog) e non viene
-    // ritentato — il prossimo tentativo e' il tick successivo.
-    internal static Delegate BuildDmqDrainHandler(string directory, string name, int maxRetries)
-    {
-        // HttpContext, NON parameter injection: un parametro IHttpClientFactory su un servizio
-        // senza AddMessagingClient verrebbe inferito da Minimal API come BODY parameter — e il
-        // tick fallirebbe 400 a body vuoto per sempre, senza un solo log utile. Da qui invece
-        // esce un errore esplicito (e MapMessaging fa comunque fail-fast all'avvio).
-        return async (HttpContext context) =>
-        {
-            var clientFactory = context.RequestServices.GetRequiredService<IHttpClientFactory>();
-            var client = clientFactory.CreateClient(MessagingEndpoints.DmqDrainClientName);
-            HttpResponseMessage response;
-            try
-            {
-                response = await client.PostAsync(
-                    $"/dmq/drain?directory={Uri.EscapeDataString(directory)}&name={Uri.EscapeDataString(name)}&maxRetries={maxRetries}",
-                    content: null, context.RequestAborted);
-            }
-            catch (OperationCanceledException ex) when (!context.RequestAborted.IsCancellationRequested)
-            {
-                // Timeout dei 15 minuti del client dedicato. TaskCanceledException E' una
-                // OperationCanceledException: senza questo rethrow scavalcherebbe il filtro dei
-                // 500 di MapMessaging (che la esclude, pensando all'abort del chiamante) e il
-                // tick finirebbe 500 a body VUOTO — proprio il caso indiagnosticabile che quel
-                // filtro esiste per prevenire. Il drain lato sidecar intanto continua.
-                throw new InvalidOperationException($"DMQ drain {directory}/{name} did not complete within the client timeout; the sidecar drain keeps running — check the next tick's summary.", ex);
-            }
-
-            string summary;
-            using (response)
-            {
-                summary = await response.Content.ReadAsStringAsync(context.RequestAborted);
-                if ((int)response.StatusCode == 404)
-                {
-                    // il caso rollout: manifest con una sidecar vecchia — il router risponde 404
-                    throw new InvalidOperationException($"DMQ drain {directory}/{name}: the pod's sidecar answered 404 — /dmq/drain requires sidecarmq >= 0.1.5 (old sidecar image in the manifest?)");
-                }
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    throw new InvalidOperationException($"DMQ drain {directory}/{name} failed: HTTP {(int)response.StatusCode} {summary}");
-                }
-            }
-
-            context.RequestServices.GetRequiredService<ILoggerFactory>()
-                .CreateLogger(typeof(MessagingEndpoints).FullName!)
-                .LogInformation("DMQ drain {Directory}/{Name}: {Summary}", directory, name, summary);
-            return Results.Ok();
-        };
+        return Map("pubSub", directory, name, handler, prefetchCount, createDmq);
     }
 
     // the HTTP response body is the RPC reply
@@ -296,10 +140,6 @@ public class MessagingRouteBuilder
 public static class MessagingEndpoints
 {
     private const int DefaultPort = 8081;
-
-    // HttpClient dedicato al drain (registrato in AddMessagingClient): il drain di una DMQ piena
-    // e' un batch che puo' durare minuti, ben oltre i 100s di default di HttpClient
-    internal const string DmqDrainClientName = "PhotoSiMessaging.DmqDrain";
 
     // Maps the subscribers + GET /_init and registers the dedicated listener.
     // Everything is excluded from OpenAPI and answers only on the messaging port: expose only
@@ -402,14 +242,6 @@ public static class MessagingEndpoints
         var builder = new MessagingRouteBuilder(group, consumerTag);
         subscribers(builder);
 
-        // fail-fast: il job di drain risolve IHttpClientFactory a runtime, e la factory esiste solo
-        // se il servizio ha chiamato AddMessagingClient. Senza questo check un solo-consumer
-        // partirebbe pulito e ogni tick del drain fallirebbe, per sempre.
-        if (builder.HasDmqDrainJobs && app.Services.GetService<IHttpClientFactory>() is null)
-        {
-            throw new InvalidOperationException("MapPubSub with DmqOptions(MaxRetries > 0) requires services.AddMessagingClient(): the internal DMQ drain job needs its HttpClient.");
-        }
-
         // CLI contract for the deploy pipeline: `dotnet <Service>.dll --dump-jobs` prints the
         // declared jobs as JSON and exits, so the pipeline can materialize/reconcile the k8s
         // CronJobs that publish each job's trigger message.
@@ -489,7 +321,7 @@ public static class MessagingEndpoints
 
     // Specchio ESATTO della kebab-izzazione della pipeline (`sed 's/\([A-Z]\)/-\1/g;s/^-//' | tr A-Z a-z`):
     // un trattino prima di OGNI maiuscola (consecutive comprese), poi tutto minuscolo.
-    // "OrderUpdatedDmqDrain" -> "order-updated-dmq-drain"
+    // "ProcessReadyToPickupOrders" -> "process-ready-to-pickup-orders"
     internal static string ToKebabCase(string source)
     {
         var result = new System.Text.StringBuilder(source.Length + source.Length / 2);

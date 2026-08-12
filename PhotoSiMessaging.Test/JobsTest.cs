@@ -55,4 +55,27 @@ public class JobsTest
 
         Assert.AreEqual("""{"jobs":[]}""", json);
     }
+
+    // Il nome del job finisce nel CronJob k8s ("job-<kebab>", limite 52 char) e la pipeline non
+    // valida: meglio morire all'avvio col nome esatto che bloccare l'intera application in ArgoCD
+    // a pipeline verde.
+    [TestMethod]
+    public void MapJob_RejectsCronJobNameOver52Chars()
+    {
+        var builder = NewBuilder();
+
+        var ex = Assert.ThrowsException<ArgumentException>(() =>
+            builder.MapJob("CartDirectory", "RecalculateProfessionalPreorderConfigurationTotals", "0 3 * * *", () => "ok"));
+        StringAssert.Contains(ex.Message, "52");
+        StringAssert.Contains(ex.Message, "job-recalculate-professional-preorder-configuration-totals");
+    }
+
+    [TestMethod]
+    public void ToKebabCase_MirrorsThePipelineSed()
+    {
+        Assert.AreEqual("process-ready-to-pickup-orders", MessagingEndpoints.ToKebabCase("ProcessReadyToPickupOrders"));
+        // maiuscole consecutive: la sed della pipeline mette un trattino prima di OGNUNA
+        Assert.AreEqual("recalculate-a-b-c", MessagingEndpoints.ToKebabCase("RecalculateABC"));
+        Assert.AreEqual("x", MessagingEndpoints.ToKebabCase("X"));
+    }
 }
