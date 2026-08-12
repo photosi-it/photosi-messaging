@@ -81,7 +81,7 @@ lancia una `BaseException` risponde automaticamente `550 + {ExceptionCode, ...}`
 il casing che tutti i client dell'ecosistema decodificano) e viene loggato secondo il suo
 `Level`, come faceva la runtime FaaS. Sull'RPC il chiamante riceve l'eccezione **tipizzata**,
 non un generico `SOMETHING_WENT_WRONG`; sul pub/sub il 550 dice al sidecar che è un esito di
-business: non conteggiato tra le function failure e mai parcheggiato nella DMQ (`createDmq`).
+business: non conteggiato tra le function failure e mai parcheggiato nella DMQ (`DmqOptions`).
 Un'eccezione **non**-PMS risponde invece `500` con `<Tipo>: <messaggio>` nel body (sempre come
 la runtime FaaS): il sidecar lo copia nell'`errorDescription` della busta bad-message/DMQ — un
 500 ASP.NET nudo avrebbe il body vuoto e i messaggi parcheggiati sarebbero indiagnosticabili.
@@ -91,12 +91,41 @@ Sentry riceve comunque l'eccezione completa (loggata a Error).
 sovrascrivibili. Occhio: il consumerTag finisce nei nomi delle code Solace — cambiarlo significa
 code nuove.
 
-`MapPubSub` accetta anche `createDmq: true` (solo pub/sub): il sidecar provisiona una coda
-`<nomeCoda>.DMQ` — 50 MB di spool, TTL messaggi 24h — e ci parcheggia una copia persistente
-di ogni messaggio fallito definitivamente (dopo i retry), pubblicandola sul topic
-`DMQ/<nomeCoda>`. Un consumer centrale (es. un logger verso Datadog) può sottoscrivere
-`DMQ/>` per osservare i fallimenti di tutta la flotta; il flusso globale `BadPubSubMessage`
-resta invariato.
+### DMQ e retry automatico (`DmqOptions`)
+
+```csharp
+// parcheggio + 3 tentativi ogni 2 ore (i default)
+messaging.MapPubSub("CartServiceDirectory", "TestPubSub", TestPubSubSubscriber.Handle,
+    dmq: new DmqOptions());
+
+// solo parcheggio, nessun retry automatico
+messaging.MapPubSub("CartServiceDirectory", "TestPubSub", TestPubSubSubscriber.Handle,
+    dmq: new DmqOptions(MaxRetries: 0));
+```
+
+`MapPubSub` accetta `dmq: new DmqOptions(...)` (solo pub/sub; **sostituisce il vecchio bool
+`createDmq`** — chi lo usava migra a `dmq: new DmqOptions()`): il sidecar provisiona una coda
+`<nomeCoda>.DMQ` — 50 MB di spool, TTL messaggi 24h — e ci parcheggia ogni messaggio fallito
+definitivamente (errori non-550), body integro e contesto (`x-original-topic`, `x-retry-count`,
+`x-parked-at`, `x-error`) nelle user property.
+
+Con `MaxRetries > 0` la libreria registra anche un job interno `<Nome>DmqDrain`: ogni
+`RetryEvery` il CronJob (materializzato dalla pipeline via `--dump-jobs`, come ogni `MapJob`)
+chiede al sidecar di rimettere i parcheggiati nella coda madre — move affidabile lato broker:
+un crash nel mezzo produce al più un duplicato, mai una perdita. Un messaggio che esaurisce i
+tentativi resta parcheggiato fino alla scadenza del TTL, marcato `x-exhausted`: si ripesca a
+mano, dopo aver sistemato la causa, con `POST /dmq/drain?directory=<Dir>&name=<Nome>&includeExhausted=1`
+sul sidecar del pod, oppure con "Move Messages" dal Manager Solace.
+
+Vincoli, validati all'avvio (una dichiarazione invalida uccide il boot, non il broker):
+`RetryEvery` a minuti interi sotto l'ora oppure ore intere — deve tradursi in una cron esatta —
+e `MaxRetries × RetryEvery ≤ 24h`, perché oltre la finestra del TTL i retry sarebbero promesse
+vuote. Con `MaxRetries: 0`, `RetryEvery` non è ammesso.
+
+Richiede sidecarmq **≥ 0.1.5** per il retry (con una sidecar più vecchia il tick del drain
+fallisce e si vede su Datadog, i messaggi restano parcheggiati); il solo parcheggio funziona
+da 0.0.87. Un consumer centrale può sottoscrivere `DMQ/>` per osservare i fallimenti di tutta
+la flotta; il flusso globale `BadPubSubMessage` resta invariato.
 
 ## Deployment
 
