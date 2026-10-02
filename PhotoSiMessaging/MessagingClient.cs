@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using PhotoSiMessaging.Exceptions;
@@ -10,6 +11,14 @@ namespace PhotoSiMessaging;
 internal sealed class MessagingClient(HttpClient httpClient) : IMessagingClient
 {
     internal const string RpcBasePath = "/publish/rpc/";
+
+    // Wire format of RPC/pubSub bodies, both directions: camelCase web defaults + enums as STRINGS — what the
+    // sls SlsMessaging client sent and read, and what every FaaS / connexion caller expects. On read the
+    // converter still accepts integer enums, so it is strictly more tolerant than the plain web defaults.
+    internal static readonly JsonSerializerOptions WireOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
     private const string PubSubBasePath = "/publish/pubsub/";
 
     public Task<TResponse> CallAsync<TRequest, TResponse>(TRequest request, int timeoutMs = IMessagingClient.DefaultRpcTimeoutMs)
@@ -25,15 +34,15 @@ internal sealed class MessagingClient(HttpClient httpClient) : IMessagingClient
     {
         var response = await httpClient.PostAsJsonAsync(
             $"{RpcBasePath}?directory={Uri.EscapeDataString(directory)}&name={Uri.EscapeDataString(name)}&timeout={timeoutMs}",
-            request);
+            request, WireOptions);
 
         if (response.IsSuccessStatusCode)
         {
-            return await response.Content.ReadFromJsonAsync<TResponse>() ?? throw new SomethingWentWrongException($"Empty RPC reply from {directory}:{name}");
+            return await response.Content.ReadFromJsonAsync<TResponse>(WireOptions) ?? throw new SomethingWentWrongException($"Empty RPC reply from {directory}:{name}");
         }
 
         // camelCase, same shape PostAsJsonAsync sent: the body attached to the exception stays replayable
-        throw await ToExceptionAsync(response, directory, name, JsonSerializer.Serialize(request, JsonSerializerOptions.Web));
+        throw await ToExceptionAsync(response, directory, name, JsonSerializer.Serialize(request, WireOptions));
     }
 
     public Task PublishAsync<TMessage>(TMessage message, bool guaranteed = true)
@@ -59,7 +68,7 @@ internal sealed class MessagingClient(HttpClient httpClient) : IMessagingClient
             url += "&guaranteed=0";
         }
 
-        var response = await httpClient.PostAsJsonAsync(url, message);
+        var response = await httpClient.PostAsJsonAsync(url, message, WireOptions);
 
         if (!response.IsSuccessStatusCode)
         {

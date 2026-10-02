@@ -8,16 +8,24 @@ using TimeoutException = PhotoSiMessaging.Exceptions.TimeoutException;
 namespace PhotoSiMessaging.Test.CartDirectory.Request
 {
     public record Echo(string? Text);
+
+    public enum Kind { Unknown, Card, Book }
+
+    public record Typed(Kind Kind, Kind? Maybe);
 }
 
 namespace PhotoSiMessaging.Test.CartDirectory.Response
 {
     public record Echo(string Reply);
+
+    public record Typed(CartDirectory.Request.Kind Kind, CartDirectory.Request.Kind? Maybe);
 }
 
 namespace PhotoSiMessaging.Test.CartDirectory.Message
 {
     public record Ping(string? Text);
+
+    public record TypedPing(CartDirectory.Request.Kind Kind);
 }
 
 namespace ShallowNs
@@ -165,6 +173,41 @@ namespace PhotoSiMessaging.Test
 
             await Assert.ThrowsExceptionAsync<ArgumentException>(() =>
                 client.CallAsync<ShallowNs.Lonely, CartDirectory.Response.Echo>(new ShallowNs.Lonely()));
+        }
+
+        // sls wire contract: enums travel as strings (SlsMessaging used JsonStringEnumConverter both ways)
+        [TestMethod]
+        public async Task CallAsync_EnumsTravelAsStrings_BothWays()
+        {
+            var (client, stub) = NewClient(HttpStatusCode.OK, """{"kind":"Book","maybe":null}""");
+
+            var response = await client.CallAsync<CartDirectory.Request.Typed, CartDirectory.Response.Typed>(
+                new CartDirectory.Request.Typed(CartDirectory.Request.Kind.Card, null));
+
+            Assert.AreEqual("""{"kind":"Card","maybe":null}""", stub.LastBody);
+            Assert.AreEqual(CartDirectory.Request.Kind.Book, response.Kind);
+        }
+
+        [TestMethod]
+        public async Task CallAsync_IntegerEnumReply_StillReads()
+        {
+            var (client, _) = NewClient(HttpStatusCode.OK, """{"kind":2,"maybe":1}""");
+
+            var response = await client.CallAsync<CartDirectory.Request.Typed, CartDirectory.Response.Typed>(
+                new CartDirectory.Request.Typed(CartDirectory.Request.Kind.Card, null));
+
+            Assert.AreEqual(CartDirectory.Request.Kind.Book, response.Kind);
+            Assert.AreEqual(CartDirectory.Request.Kind.Card, response.Maybe);
+        }
+
+        [TestMethod]
+        public async Task PublishAsync_EnumsTravelAsStrings()
+        {
+            var (client, stub) = NewClient(HttpStatusCode.NoContent);
+
+            await client.PublishAsync(new CartDirectory.Message.TypedPing(CartDirectory.Request.Kind.Card));
+
+            Assert.AreEqual("""{"kind":"Card"}""", stub.LastBody);
         }
 
         [TestMethod]

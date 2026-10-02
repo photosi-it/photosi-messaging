@@ -55,6 +55,9 @@ public class MyService(IMessagingClient messaging)
 
 `IMessagingClient` è un'interfaccia: nei test dei tuoi handler la mocki senza toccare HttpClient.
 
+I body (RPC e pub/sub) viaggiano camelCase con gli **enum come stringhe**, come SlsMessaging e il FaaS:
+in lettura sono accettati anche gli enum numerici.
+
 ### Errori tipizzati
 
 Un servizio remoto che fallisce risponde `550 {ExceptionCode, ExceptionMessage, ExceptionDetail}`:
