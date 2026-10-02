@@ -36,13 +36,24 @@ internal sealed class MessagingClient(HttpClient httpClient) : IMessagingClient
         throw await ToExceptionAsync(response, directory, name, JsonSerializer.Serialize(request, JsonSerializerOptions.Web));
     }
 
-    public async Task PublishAsync<TMessage>(TMessage message, bool guaranteed = true)
+    public Task PublishAsync<TMessage>(TMessage message, bool guaranteed = true)
     {
         var messageType = typeof(TMessage);
-        var directory = GetDirectory(messageType);
-        var name = messageType.Name;
+        return SendPubSubAsync(GetDirectory(messageType), messageType.Name, suffix: null, message, guaranteed);
+    }
 
+    public Task PublishAsync(string directory, string name, object? message, string? suffix = null, bool guaranteed = true)
+        => SendPubSubAsync(directory, name, suffix, message, guaranteed);
+
+    private async Task SendPubSubAsync<TMessage>(string directory, string name, string? suffix, TMessage message, bool guaranteed)
+    {
         var url = $"{PubSubBasePath}?directory={Uri.EscapeDataString(directory)}&name={Uri.EscapeDataString(name)}";
+        if (!string.IsNullOrEmpty(suffix))
+        {
+            // the sidecar appends it to the topic: PhotosiMessage.{directory}:Message.{name}.{suffix}
+            url += $"&suffix={Uri.EscapeDataString(suffix)}";
+        }
+
         if (!guaranteed)
         {
             url += "&guaranteed=0";
@@ -52,7 +63,7 @@ internal sealed class MessagingClient(HttpClient httpClient) : IMessagingClient
 
         if (!response.IsSuccessStatusCode)
         {
-            throw await ToExceptionAsync(response, directory, name);
+            throw await ToExceptionAsync(response, directory, string.IsNullOrEmpty(suffix) ? name : $"{name}.{suffix}");
         }
     }
 
@@ -108,7 +119,7 @@ internal sealed class MessagingClient(HttpClient httpClient) : IMessagingClient
         return exception;
     }
 
-    private static string GetDirectory(Type messageType)
+    internal static string GetDirectory(Type messageType)
     {
         var ns = messageType.Namespace
                  ?? throw new ArgumentException($"{messageType.Name} must declare a namespace shaped as X.Y.{{Directory}}.Request/Response/Message");

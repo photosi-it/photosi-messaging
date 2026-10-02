@@ -43,6 +43,12 @@ public class MyService(IMessagingClient messaging)
         // pub/sub: PhotosiMessage.CartServiceDirectory:Message.TestPubSub
         await messaging.PublishAsync(new Message.TestPubSub("hi"));           // guaranteed
         await messaging.PublishAsync(new Message.TestPubSub("hi"), guaranteed: false); // best effort
+
+        // pub/sub con suffix: PhotosiMessage.CartServiceDirectory:Message.TestPubSub.Card
+        await messaging.PublishAsync(new Message.TestPubSub("hi"), "Card");
+
+        // directory + nome espliciti (+ suffix opzionale), come CallAsync(directory, name, ...)
+        await messaging.PublishAsync("FileMoverDirectory", "DeleteFiles", files);
     }
 }
 ```

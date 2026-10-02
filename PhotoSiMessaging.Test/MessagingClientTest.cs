@@ -199,6 +199,66 @@ namespace PhotoSiMessaging.Test
             Assert.IsFalse(ex.Data.Contains("Request Message")); // only CallAsync attaches the body
         }
 
+        [TestMethod]
+        public async Task PublishAsync_WithSuffix_AppendsSuffix()
+        {
+            var (client, stub) = NewClient(HttpStatusCode.NoContent);
+
+            await ((IMessagingClient)client).PublishAsync(new CartDirectory.Message.Ping("hi"), "Card");
+
+            Assert.AreEqual("/publish/pubsub/?directory=CartDirectory&name=Ping&suffix=Card", stub.LastRequest!.RequestUri!.PathAndQuery);
+            Assert.AreEqual("""{"text":"hi"}""", stub.LastBody);
+        }
+
+        [TestMethod]
+        public async Task PublishAsyncExplicit_BuildsUrlAndSendsCamelCaseBody()
+        {
+            var (client, stub) = NewClient(HttpStatusCode.NoContent);
+
+            await client.PublishAsync("FileMoverDirectory", "DeleteFiles", new CartDirectory.Message.Ping("hi"));
+
+            Assert.AreEqual("/publish/pubsub/?directory=FileMoverDirectory&name=DeleteFiles", stub.LastRequest!.RequestUri!.PathAndQuery);
+            Assert.AreEqual("""{"text":"hi"}""", stub.LastBody);
+        }
+
+        [TestMethod]
+        public async Task PublishAsyncExplicit_SuffixAndNotGuaranteed_BuildsUrl()
+        {
+            var (client, stub) = NewClient(HttpStatusCode.NoContent);
+
+            await client.PublishAsync("CardDirectory", "ObsoleteUserConfiguration", null, suffix: "Card", guaranteed: false);
+
+            Assert.AreEqual("/publish/pubsub/?directory=CardDirectory&name=ObsoleteUserConfiguration&suffix=Card&guaranteed=0", stub.LastRequest!.RequestUri!.PathAndQuery);
+        }
+
+        [TestMethod]
+        public async Task PublishAsync_WithSuffix_Failure_RequestTypeCarriesSuffix()
+        {
+            var (client, _) = NewClient(HttpStatusCode.InternalServerError, "oops");
+
+            var ex = await Assert.ThrowsExceptionAsync<SomethingWentWrongException>(() =>
+                ((IMessagingClient)client).PublishAsync(new CartDirectory.Message.Ping("hi"), "Card"));
+
+            Assert.AreEqual("CartDirectory:Ping.Card", ex.Data["Request Type"]);
+        }
+
+        // An IMessagingClient fake written against the pre-suffix surface still compiles (default interface
+        // members); calling the new explicit publish on it fails loudly instead of silently doing nothing.
+        private sealed class LegacyFake : IMessagingClient
+        {
+            public Task<TResponse> CallAsync<TRequest, TResponse>(TRequest request, int timeoutMs = IMessagingClient.DefaultRpcTimeoutMs) => throw new NotImplementedException();
+            public Task<TResponse> CallAsync<TResponse>(string directory, string name, object? request, int timeoutMs = IMessagingClient.DefaultRpcTimeoutMs) => throw new NotImplementedException();
+            public Task PublishAsync<TMessage>(TMessage message, bool guaranteed = true) => Task.CompletedTask;
+        }
+
+        [TestMethod]
+        public async Task LegacyFake_StillCompiles_AndExplicitPublishThrowsNotSupported()
+        {
+            IMessagingClient fake = new LegacyFake();
+
+            await Assert.ThrowsExceptionAsync<NotSupportedException>(() => fake.PublishAsync("CardDirectory", "X", null));
+        }
+
         // MessagingClient is internal + built via ActivatorUtilities: guards that DI can still
         // resolve the typed client through the interface
         [TestMethod]
