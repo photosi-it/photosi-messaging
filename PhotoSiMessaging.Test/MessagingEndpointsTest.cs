@@ -1,3 +1,7 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.Extensions.Logging;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using PhotoSiMessaging;
@@ -81,5 +85,42 @@ public class MessagingEndpointsTest
     public void ToLogLevel_MapsFaultLevel(Level level, LogLevel expected)
     {
         Assert.AreEqual(expected, MessagingEndpoints.ToLogLevel(level));
+    }
+
+    // With a real server the messaging port is still added (the guard must not disable the normal path).
+    [TestMethod]
+    public void MapMessaging_AddsMessagingPort()
+    {
+        var app = WebApplication.CreateBuilder().Build();
+
+        app.MapMessaging(_ => { });
+
+        CollectionAssert.Contains(app.Urls.ToList(), "http://0.0.0.0:8081");
+    }
+
+    // Build-time OpenAPI generation (GetDocument) and TestServer run the app without server addresses:
+    // MapMessaging must not throw there (app.Urls would).
+    [TestMethod]
+    public void MapMessaging_WithoutServerAddresses_DoesNotThrow()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddSingleton<IServer, ServerWithoutAddresses>();
+        var app = builder.Build();
+
+        app.MapMessaging(_ => { });
+    }
+
+    private sealed class ServerWithoutAddresses : IServer
+    {
+        public IFeatureCollection Features { get; } = new FeatureCollection();
+
+        public Task StartAsync<TContext>(IHttpApplication<TContext> application, CancellationToken cancellationToken)
+            where TContext : notnull => Task.CompletedTask;
+
+        public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public void Dispose()
+        {
+        }
     }
 }

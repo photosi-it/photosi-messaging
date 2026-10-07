@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Hosting.Server;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using FluentValidation;
@@ -153,7 +155,9 @@ public static class MessagingEndpoints
     {
         consumerTag ??= ToConstantCase(Environment.GetEnvironmentVariable("SERVICE_NAME") ?? app.Environment.ApplicationName);
 
-        app.Urls.Add($"http://0.0.0.0:{port}");
+        // app.Urls needs a real server: build-time OpenAPI generation (GetDocument) and TestServer have none, and
+        // app.Urls throws there. No server addresses = nothing to listen on, so the port is simply not added.
+        app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()?.Addresses.Add($"http://0.0.0.0:{port}");
 
         // A malformed body fails [FromBody] binding BEFORE the endpoint filters run, so the BaseException filter
         // below can't catch it. With ThrowOnBadRequest=true (set in AddMessagingClient) it surfaces here as a
