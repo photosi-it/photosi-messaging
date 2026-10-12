@@ -40,6 +40,7 @@ public class MalformedBodyFaultTest
             m.MapRpc("TestDir", "EchoBoom", (EchoRequest _) => { throw new ObjectNotFoundException("echo 42 not found"); });
             m.MapPubSub("TestDir", "NotifyBoom", (EchoRequest _) => { throw new ObjectNotFoundException("notify 42 not found"); });
             m.MapPubSub("TestDir", "NotifyCrash", (EchoRequest _) => { throw new InvalidOperationException("Sequence contains more than one element"); });
+            m.MapPubSub("TestDir", "NotifyTimeout", (EchoRequest _) => { throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 100 seconds elapsing."); });
         }, consumerTag: "TEST", port: port); // app.Urls := [:port] => Kestrel binds only this port
         await app.StartAsync();
         return app;
@@ -147,6 +148,28 @@ public class MalformedBodyFaultTest
 
             Assert.AreEqual(500, (int)resp.StatusCode);
             StringAssert.Contains(await resp.Content.ReadAsStringAsync(), "InvalidOperationException: Sequence contains more than one element");
+        }
+        finally
+        {
+            await app.StopAsync();
+            await app.DisposeAsync();
+        }
+    }
+
+    // A handler timing out (an HttpClient timeout surfaces as TaskCanceledException) is a crash like any other: it
+    // used to skip the filter, so the sidecar parked an empty "HTTP 500: ". Only an aborted request is rethrown.
+    [TestMethod]
+    public async Task PubSubHandlerTimeout_Returns500WithTypeAndMessage()
+    {
+        var port = FreePort();
+        var app = await StartAppAsync(port);
+        try
+        {
+            using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
+            var resp = await client.PostAsync("/api/pubSub/TestDir/NotifyTimeout", Json("""{"value":5}"""));
+
+            Assert.AreEqual(500, (int)resp.StatusCode);
+            StringAssert.Contains(await resp.Content.ReadAsStringAsync(), "TaskCanceledException: The request was canceled");
         }
         finally
         {

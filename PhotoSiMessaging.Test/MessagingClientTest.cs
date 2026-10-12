@@ -155,6 +155,41 @@ namespace PhotoSiMessaging.Test
                 client.CallAsync<CartDirectory.Request.Echo, CartDirectory.Response.Echo>(new CartDirectory.Request.Echo("hi")));
         }
 
+        private sealed class HangingHandler : HttpMessageHandler
+        {
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+                throw new InvalidOperationException("unreachable");
+            }
+        }
+
+        private static MessagingClient NewHangingClient() =>
+            new(new HttpClient(new HangingHandler()) { BaseAddress = new Uri("http://sidecar:8005") });
+
+        // a hung sidecar used to pin the call for HttpClient's 100 s and end in a raw TaskCanceledException
+        [TestMethod]
+        public async Task CallAsync_SidecarHangs_ThrowsTimeoutFaultAtTheDeadline()
+        {
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+
+            var ex = await Assert.ThrowsExceptionAsync<TimeoutException>(() =>
+                NewHangingClient().CallAsync<CartDirectory.Request.Echo, CartDirectory.Response.Echo>(new CartDirectory.Request.Echo("hi"), timeoutMs: 100));
+
+            Assert.AreEqual("TIMEOUT", ex.Code);
+            Assert.IsTrue(watch.ElapsedMilliseconds < 100 + MessagingClient.DeadlineMarginMs + 1_000, $"took {watch.ElapsedMilliseconds} ms");
+        }
+
+        // the caller giving up (request aborted, shutdown) is not a TIMEOUT fault: it propagates as a cancellation
+        [TestMethod]
+        public async Task CallAsync_CallerCancels_ThrowsCancellationNotTimeoutFault()
+        {
+            using var cancellation = new CancellationTokenSource(50);
+
+            await Assert.ThrowsExceptionAsync<TaskCanceledException>(() =>
+                NewHangingClient().CallAsync<CartDirectory.Request.Echo, CartDirectory.Response.Echo>(new CartDirectory.Request.Echo("hi"), cancellation.Token));
+        }
+
         [TestMethod]
         public async Task CallAsync_500_SomethingWentWrongWithResponseBody()
         {

@@ -58,6 +58,12 @@ public class MyService(IMessagingClient messaging)
 I body (RPC e pub/sub) viaggiano camelCase con gli **enum come stringhe**, come SlsMessaging e il FaaS:
 in lettura sono accettati anche gli enum numerici.
 
+Ogni chiamata ha una scadenza: `timeoutMs` + 2 s per le RPC (a `timeoutMs` il sidecar risponde già 550
+TIMEOUT da solo) e 10 s per le publish. Se scade, cioè il sidecar è bloccato o saturo, arriva una
+`TimeoutException` (codice TIMEOUT) invece di restare appesi. Gli overload con `CancellationToken`
+(es. `CallAsync<TReq, TRes>(request, cancellationToken)`) annullano la chiamata quando il chiamante rinuncia
+(richiesta interrotta, shutdown): in quel caso arriva un'`OperationCanceledException`, non un TIMEOUT.
+
 ### Errori tipizzati
 
 Un servizio remoto che fallisce risponde `550 {ExceptionCode, ExceptionMessage, ExceptionDetail}`:
