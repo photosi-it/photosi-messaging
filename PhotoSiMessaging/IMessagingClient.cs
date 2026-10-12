@@ -25,4 +25,18 @@ public interface IMessagingClient
     // Default body only for source compatibility of existing fakes; MessagingClient implements it.
     Task PublishAsync(string directory, string name, object? message, string? suffix = null, bool guaranteed = true)
         => throw new NotSupportedException($"{GetType().Name} does not implement PublishAsync(directory, name, ...)");
+
+    // Cancellation-aware overloads (the token is the 2nd argument so it never collides with the optional ones above).
+    // Default bodies keep hand-written fakes compiling; MessagingClient overrides them.
+    Task<TResponse> CallAsync<TRequest, TResponse>(TRequest request, CancellationToken cancellationToken, int timeoutMs = DefaultRpcTimeoutMs)
+        => CallAsync<TRequest, TResponse>(request, timeoutMs);
+
+    Task<TResponse> CallAsync<TResponse>(string directory, string name, object? request, CancellationToken cancellationToken, int timeoutMs = DefaultRpcTimeoutMs)
+        => CallAsync<TResponse>(directory, name, request, timeoutMs);
+
+    Task PublishAsync<TMessage>(TMessage message, CancellationToken cancellationToken, bool guaranteed = true)
+        => PublishAsync(message, guaranteed);
+
+    Task PublishAsync(string directory, string name, object? message, CancellationToken cancellationToken, string? suffix = null, bool guaranteed = true)
+        => PublishAsync(directory, name, message, suffix, guaranteed);
 }

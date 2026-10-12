@@ -226,7 +226,7 @@ public static class MessagingEndpoints
 
                 return Results.Text(SerializeFault(ex), "application/json", statusCode: 550);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (!context.HttpContext.RequestAborted.IsCancellationRequested)
             {
                 // Unhandled (non-PMS) exception: mirror the FaaS main-runtime, which answered
                 // 500 + the exception message as the body. In production a bare ASP.NET 500 has an
